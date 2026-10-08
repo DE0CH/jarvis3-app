@@ -1,0 +1,574 @@
+// A mock Jarvis 3 instance for the jarvis3 web e2e (and for local UI work): serves the jarvis3
+// web export at its origin, answers the instance API with the shapes of src/jarvis3/api-types.ts
+// (vendored from DE0CH/jarvis3), and relays `/api/tasks/:id/daemon` to a real Paseo daemon,
+// adding `paseo.bearer.<password>` the way the real server does.
+//
+// Identity stands in for Cloudflare Access: the `CF_Authorization` cookie (or the
+// `Cf-Access-Authenticated-User-Email` header) is the user's email, unsigned. Never deploy this.
+//
+// Standalone: node --import tsx e2e-jarvis3/mock-instance.ts --dist dist-jarvis3 --port 8090 \
+//   [--daemon ws://127.0.0.1:6768/ws --daemon-password …]
+import { createReadStream, existsSync, statSync } from "node:fs";
+import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import path from "node:path";
+import type { Duplex } from "node:stream";
+import { WebSocket, WebSocketServer } from "ws";
+import type {
+  ApiError,
+  CreateTaskRequest,
+  ErrorCode,
+  ModelList,
+  PersonalLayerVersionView,
+  PersonalLayerView,
+  PersonalNote,
+  ResetResult,
+  SetLimitsRequest,
+  TaskView,
+  UserDetail,
+} from "../src/jarvis3/api-types";
+
+export interface MockUser {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  isAdmin: boolean;
+}
+
+export interface MockDaemonTarget {
+  url: string;
+  password: string;
+}
+
+type LayerContent = Omit<PersonalLayerView, "versions">;
+
+interface StoredLayer {
+  current: LayerContent;
+  versions: { view: PersonalLayerVersionView; layer: LayerContent }[];
+}
+
+export interface MockInstanceOptions {
+  distDir: string | null;
+  port?: number;
+  users?: MockUser[];
+  tasks?: TaskView[];
+  /** taskId -> the daemon its proxy reaches. */
+  daemons?: Record<string, MockDaemonTarget>;
+  /** A created or resumed task becomes running after this long (ms). */
+  startDelayMs?: number;
+  /** The daemon a newly created task's proxy reaches (none: it never connects). */
+  newTaskDaemon?: MockDaemonTarget | null;
+}
+
+export interface MockInstance {
+  url: string;
+  port: number;
+  state: { tasks: TaskView[]; layers: Map<string, StoredLayer>; requests: string[] };
+  close(): Promise<void>;
+}
+
+const MODELS: ModelList = {
+  models: [
+    { id: "anthropic/claude-example", label: "Claude (example)" },
+    { id: "openai/gpt-example", label: "GPT (example)" },
+  ],
+  default: "anthropic/claude-example",
+};
+
+export const DEFAULT_USERS: MockUser[] = [
+  { id: "u-alice", email: "alice@example.org", name: "Alice", role: "staff", isAdmin: false },
+  { id: "u-bob", email: "bob@example.org", name: "Bob", role: "staff", isAdmin: false },
+  { id: "u-admin", email: "admin@example.org", name: "Admin", role: "admin", isAdmin: true },
+];
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript",
+  ".css": "text/css",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".svg": "image/svg+xml",
+  ".ttf": "font/ttf",
+  ".woff2": "font/woff2",
+  ".wasm": "application/wasm",
+  ".map": "application/json",
+};
+
+const now = () => new Date().toISOString();
+
+function emptyLayer(): LayerContent {
+  return { instructions: "", skills: [], notes: [], updatedAt: null };
+}
+
+function isEmpty(layer: LayerContent): boolean {
+  return layer.instructions === "" && layer.skills.length === 0 && layer.notes.length === 0;
+}
+
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: ErrorCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** One API request: the caller, the path parameters, the body. Handlers return [status, body]. */
+interface Ctx {
+  user: MockUser;
+  params: string[];
+  body: () => Promise<unknown>;
+}
+type Handler = (ctx: Ctx) => [number, unknown] | Promise<[number, unknown]>;
+type Route = [method: string, pattern: RegExp, handler: Handler];
+
+function setOverride(previous: number | null, next: number | null | undefined): number | null {
+  return next === undefined ? previous : next;
+}
+
+export async function startMockInstance(options: MockInstanceOptions): Promise<MockInstance> {
+  const users = options.users ?? DEFAULT_USERS;
+  const tasks: TaskView[] = (options.tasks ?? []).map((task) => Object.assign({}, task));
+  const daemons: Record<string, MockDaemonTarget> = { ...options.daemons };
+  const layers = new Map<string, StoredLayer>();
+  const limits = new Map<string, { usd: number | null; hours: number | null }>();
+  const requests: string[] = [];
+  const created = new Map<string, string>(); // `${userId}:${requestId}` -> task id
+  const startDelay = options.startDelayMs ?? 1500;
+  let counter = 0;
+
+  // ---- state helpers ----
+
+  const layerOf = (userId: string): StoredLayer => {
+    let layer = layers.get(userId);
+    if (!layer) {
+      layer = { current: emptyLayer(), versions: [] };
+      layers.set(userId, layer);
+    }
+    return layer;
+  };
+  const viewOf = (userId: string): PersonalLayerView => {
+    const layer = layerOf(userId);
+    return { ...layer.current, versions: layer.versions.map((v) => v.view).toReversed() };
+  };
+  const detailOf = (user: MockUser): UserDetail => {
+    const override = limits.get(user.id) ?? { usd: null, hours: null };
+    return {
+      user: { ...user, status: "active", createdAt: "2026-10-01T00:00:00.000Z" },
+      limits: {
+        openrouterMonthlyUsd: override.usd ?? 20,
+        openrouterOverride: override.usd !== null,
+        machineHoursPerMonth: override.hours ?? 10,
+        machineHoursOverride: override.hours !== null,
+      },
+      usage: {
+        month: "2026-10",
+        machineHours: 1.5,
+        machineHoursCapReached: false,
+        openrouterKey: true,
+      },
+    };
+  };
+  const touch = (task: TaskView, patch: Partial<TaskView>) =>
+    Object.assign(task, patch, { updatedAt: now() });
+  const startLater = (task: TaskView) =>
+    setTimeout(
+      () => touch(task, { state: "running", busy: null, connected: Boolean(daemons[task.id]) }),
+      startDelay,
+    );
+  const ownTask = (user: MockUser, id: string): TaskView => {
+    const task = tasks.find((t) => t.id === id && (t.userId === user.id || user.isAdmin));
+    if (!task) throw new HttpError(404, "not_found", "no such task");
+    return task;
+  };
+  const userFor = (caller: MockUser, id: string): MockUser => {
+    const target = id === "me" ? caller : users.find((u) => u.id === id);
+    if (!target || (target.id !== caller.id && !caller.isAdmin)) {
+      throw new HttpError(404, "not_found", "not found");
+    }
+    return target;
+  };
+  const requireAdmin = (caller: MockUser) => {
+    if (!caller.isAdmin) throw new HttpError(404, "not_found", "not found");
+  };
+  const layerFor = (ctx: Ctx) => {
+    const target = userFor(ctx.user, ctx.params[0] ?? "");
+    const layer = layerOf(target.id);
+    return {
+      layer,
+      view: () => viewOf(target.id),
+      saved: () => {
+        layer.current.updatedAt = now();
+        return viewOf(target.id);
+      },
+    };
+  };
+  const archive = (layer: StoredLayer, reason: "reset" | "undo") => {
+    const version = (layer.versions.at(-1)?.view.version ?? 0) + 1;
+    layer.versions.push({
+      view: { version, createdAt: now(), reason },
+      layer: structuredClone(layer.current),
+    });
+    return version;
+  };
+
+  // ---- task handlers ----
+
+  const createTask: Handler = async ({ user, body }) => {
+    const request = (await body()) as CreateTaskRequest;
+    if (!request.prompt || request.prompt.length > 16000) {
+      throw new HttpError(400, "bad_request", "prompt is required");
+    }
+    const key = `${user.id}:${request.requestId ?? ""}`;
+    const repeat = request.requestId ? tasks.find((t) => t.id === created.get(key)) : null;
+    if (repeat) return [201, repeat];
+    counter += 1;
+    const task: TaskView = {
+      id: `new${counter.toString(16).padStart(13, "0")}`,
+      userId: user.id,
+      title: (request.title ?? request.prompt.split("\n")[0] ?? "").slice(0, 80),
+      model: request.model ?? MODELS.default,
+      state: "starting",
+      busy: { kind: "creating", since: now() },
+      error: null,
+      pausedReason: null,
+      createdAt: now(),
+      updatedAt: now(),
+      connected: false,
+    };
+    tasks.unshift(task);
+    if (request.requestId) created.set(key, task.id);
+    if (options.newTaskDaemon) daemons[task.id] = options.newTaskDaemon;
+    startLater(task);
+    return [201, task];
+  };
+  const pauseTask: Handler = ({ user, params }) => {
+    const task = ownTask(user, params[0] ?? "");
+    if (!["starting", "running", "idle"].includes(task.state)) {
+      throw new HttpError(409, "conflict", "the task is not running");
+    }
+    return [202, touch(task, { state: "paused", pausedReason: "user", connected: false })];
+  };
+  const resumeTask: Handler = ({ user, params }) => {
+    const task = ownTask(user, params[0] ?? "");
+    if (task.state !== "paused") throw new HttpError(409, "conflict", "the task is not paused");
+    touch(task, {
+      state: "starting",
+      busy: { kind: "resuming", since: now() },
+      pausedReason: null,
+    });
+    startLater(task);
+    return [202, task];
+  };
+
+  // ---- personal layer handlers ----
+
+  const putSkill: Handler = async (ctx) => {
+    const { layer, saved } = layerFor(ctx);
+    const name = decodeURIComponent(ctx.params[1] ?? "");
+    const { files } = (await ctx.body()) as { files: Record<string, string> };
+    if (!files?.["SKILL.md"]) throw new HttpError(400, "bad_request", "SKILL.md is required");
+    layer.current.skills = [
+      ...layer.current.skills.filter((s) => s.name !== name),
+      { name, files },
+    ];
+    return [200, saved()];
+  };
+  const deleteSkill: Handler = (ctx) => {
+    const { layer, saved } = layerFor(ctx);
+    const name = decodeURIComponent(ctx.params[1] ?? "");
+    if (!layer.current.skills.some((s) => s.name === name)) {
+      throw new HttpError(404, "not_found", "no such skill");
+    }
+    layer.current.skills = layer.current.skills.filter((s) => s.name !== name);
+    return [200, saved()];
+  };
+  const addNote: Handler = async (ctx) => {
+    const { layer, saved } = layerFor(ctx);
+    const { text } = (await ctx.body()) as { text: string };
+    const note: PersonalNote = {
+      id: `n${Date.now()}`,
+      text: text.trim(),
+      createdAt: now(),
+      source: "user",
+      taskId: null,
+    };
+    layer.current.notes = [...layer.current.notes, note];
+    saved();
+    return [201, note];
+  };
+  const resetLayer: Handler = (ctx) => {
+    const { layer, view } = layerFor(ctx);
+    const version = isEmpty(layer.current) ? null : archive(layer, "reset");
+    layer.current = { ...emptyLayer(), updatedAt: now() };
+    return [200, { version, layer: view() } satisfies ResetResult];
+  };
+  const undoLayer: Handler = (ctx) => {
+    const { layer, view } = layerFor(ctx);
+    const latest = layer.versions.at(-1);
+    if (!latest) throw new HttpError(409, "conflict", "nothing to undo");
+    const restore = structuredClone(latest.layer);
+    if (!isEmpty(layer.current)) archive(layer, "undo");
+    layer.current = { ...restore, updatedAt: now() };
+    return [200, view()];
+  };
+  const setLimits: Handler = async (ctx) => {
+    requireAdmin(ctx.user);
+    const target = userFor(ctx.user, ctx.params[0] ?? "");
+    const request = (await ctx.body()) as SetLimitsRequest;
+    const previous = limits.get(target.id) ?? { usd: null, hours: null };
+    limits.set(target.id, {
+      usd: setOverride(previous.usd, request.openrouterMonthlyUsd),
+      hours: setOverride(previous.hours, request.machineHoursPerMonth),
+    });
+    return [200, detailOf(target)];
+  };
+
+  const ID = "([^/]+)";
+  const routes: Route[] = [
+    ["GET", /^\/api\/me$/, ({ user }) => [200, detailOf(user)]],
+    ["GET", /^\/api\/models$/, () => [200, MODELS]],
+    ["GET", /^\/api\/notices$/, () => [200, { notices: [] }]],
+    [
+      "GET",
+      /^\/api\/tasks$/,
+      ({ user }) => [200, { tasks: tasks.filter((t) => t.userId === user.id) }],
+    ],
+    ["POST", /^\/api\/tasks$/, createTask],
+    [
+      "GET",
+      new RegExp(`^/api/tasks/${ID}$`),
+      ({ user, params }) => [200, ownTask(user, params[0] ?? "")],
+    ],
+    [
+      "DELETE",
+      new RegExp(`^/api/tasks/${ID}$`),
+      ({ user, params }) => [
+        202,
+        touch(ownTask(user, params[0] ?? ""), { state: "archived", busy: null, connected: false }),
+      ],
+    ],
+    ["POST", new RegExp(`^/api/tasks/${ID}/pause$`), pauseTask],
+    ["POST", new RegExp(`^/api/tasks/${ID}/resume$`), resumeTask],
+    [
+      "GET",
+      /^\/api\/users$/,
+      ({ user }) => {
+        requireAdmin(user);
+        return [200, { users: users.map(detailOf) }];
+      },
+    ],
+    [
+      "GET",
+      new RegExp(`^/api/users/${ID}$`),
+      ({ user, params }) => [200, detailOf(userFor(user, params[0] ?? ""))],
+    ],
+    ["PATCH", new RegExp(`^/api/users/${ID}/limits$`), setLimits],
+    ["GET", new RegExp(`^/api/users/${ID}/layer$`), (ctx) => [200, layerFor(ctx).view()]],
+    [
+      "PUT",
+      new RegExp(`^/api/users/${ID}/layer/instructions$`),
+      async (ctx) => {
+        const { layer, saved } = layerFor(ctx);
+        layer.current.instructions = ((await ctx.body()) as { text: string }).text;
+        return [200, saved()];
+      },
+    ],
+    ["PUT", new RegExp(`^/api/users/${ID}/layer/skills/${ID}$`), putSkill],
+    ["DELETE", new RegExp(`^/api/users/${ID}/layer/skills/${ID}$`), deleteSkill],
+    ["POST", new RegExp(`^/api/users/${ID}/layer/notes$`), addNote],
+    [
+      "DELETE",
+      new RegExp(`^/api/users/${ID}/layer/notes/${ID}$`),
+      (ctx) => {
+        const { layer, saved } = layerFor(ctx);
+        layer.current.notes = layer.current.notes.filter((n) => n.id !== ctx.params[1]);
+        return [200, saved()];
+      },
+    ],
+    ["POST", new RegExp(`^/api/users/${ID}/layer/reset$`), resetLayer],
+    ["POST", new RegExp(`^/api/users/${ID}/layer/undo$`), undoLayer],
+  ];
+
+  // ---- HTTP ----
+
+  function callerOf(req: IncomingMessage): MockUser | null {
+    const header = req.headers["cf-access-authenticated-user-email"];
+    const cookie = /(?:^|;\s*)CF_Authorization=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
+    const fromCookie = cookie ? decodeURIComponent(cookie) : null;
+    const email = typeof header === "string" ? header : fromCookie;
+    return users.find((user) => user.email === email) ?? null;
+  }
+
+  function send(res: ServerResponse, status: number, body: unknown): void {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  }
+
+  function readJson(req: IncomingMessage): () => Promise<unknown> {
+    return async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const text = Buffer.concat(chunks).toString("utf8");
+      return text ? JSON.parse(text) : {};
+    };
+  }
+
+  async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const method = req.method ?? "GET";
+    requests.push(`${method} ${url.pathname}`);
+    if (url.pathname === "/api/health") return send(res, 200, { ok: true, version: "mock" });
+    const user = callerOf(req);
+    if (!user) throw new HttpError(401, "unauthenticated", "no Access identity");
+    for (const [routeMethod, pattern, handler] of routes) {
+      const match = routeMethod === method ? pattern.exec(url.pathname) : null;
+      if (!match) continue;
+      const [status, body] = await handler({ user, params: match.slice(1), body: readJson(req) });
+      return send(res, status, body);
+    }
+    throw new HttpError(404, "not_found", "not found");
+  }
+
+  function serveStatic(res: ServerResponse, url: URL): void {
+    if (!options.distDir) {
+      res.writeHead(404).end("no web build");
+      return;
+    }
+    const root = path.resolve(options.distDir);
+    let file = path.resolve(root, `.${decodeURIComponent(url.pathname)}`);
+    if (!file.startsWith(root) || !existsSync(file) || statSync(file).isDirectory()) {
+      file = path.join(root, "index.html"); // single-page app
+    }
+    res.writeHead(200, { "content-type": MIME[path.extname(file)] ?? "application/octet-stream" });
+    createReadStream(file).pipe(res);
+  }
+
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://mock");
+    if (!url.pathname.startsWith("/api/")) {
+      serveStatic(res, url);
+      return;
+    }
+    api(req, res, url).catch((error: unknown) => {
+      const known =
+        error instanceof HttpError ? error : new HttpError(500, "internal", String(error));
+      send(res, known.status, {
+        error: { code: known.code, message: known.message },
+      } satisfies ApiError);
+    });
+  });
+
+  // ---- the daemon proxy ----
+  // Authorise like the real server (owner or admin, else the 404 answer; 503 while not
+  // connected), then relay frames both ways with the daemon password added.
+
+  const wss = new WebSocketServer({
+    noServer: true,
+    handleProtocols: (offered) => [...offered].find((p) => !p.startsWith("paseo.bearer.")) ?? false,
+  });
+
+  function relay(client: WebSocket, target: MockDaemonTarget): void {
+    const upstream = new WebSocket(target.url, [`paseo.bearer.${target.password}`]);
+    const queue: { data: WebSocket.RawData; binary: boolean }[] = [];
+    upstream.on("open", () => {
+      for (const item of queue.splice(0)) upstream.send(item.data, { binary: item.binary });
+    });
+    client.on("message", (data, binary) => {
+      if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary });
+      else queue.push({ data, binary });
+    });
+    upstream.on("message", (data, binary) => {
+      if (client.readyState === WebSocket.OPEN) client.send(data, { binary });
+    });
+    const closeBoth = () => {
+      if (client.readyState === WebSocket.OPEN) client.close(1001);
+      if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
+        upstream.close();
+      }
+    };
+    upstream.on("close", closeBoth);
+    upstream.on("error", closeBoth);
+    client.on("close", closeBoth);
+  }
+
+  function upgradeTarget(req: IncomingMessage, pathname: string): MockDaemonTarget | number {
+    const match = /^\/api\/tasks\/([^/]+)\/daemon$/.exec(pathname);
+    if (!match) return 404;
+    const user = callerOf(req);
+    if (!user) return 401;
+    const id = decodeURIComponent(match[1] ?? "");
+    const task = tasks.find((t) => t.id === id && (t.userId === user.id || user.isAdmin));
+    if (!task) return 404;
+    const target = daemons[task.id];
+    return task.connected && target ? target : 503;
+  }
+
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const url = new URL(req.url ?? "/", "http://mock");
+    requests.push(`WS ${url.pathname}`);
+    const target = upgradeTarget(req, url.pathname);
+    if (typeof target === "number") {
+      socket.end(`HTTP/1.1 ${target} ${http.STATUS_CODES[target] ?? ""}\r\n\r\n`);
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (client) => relay(client, target));
+  });
+
+  await new Promise<void>((resolve) => server.listen(options.port ?? 0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    port,
+    state: { tasks, layers, requests },
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const client of wss.clients) client.terminate();
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+// ---- standalone ----------------------------------------------------------------------------
+
+function arg(name: string): string | null {
+  const index = process.argv.indexOf(`--${name}`);
+  return index >= 0 ? (process.argv[index + 1] ?? null) : null;
+}
+
+async function main(): Promise<void> {
+  const daemonUrl = arg("daemon");
+  const daemon = daemonUrl ? { url: daemonUrl, password: arg("daemon-password") ?? "" } : null;
+  const t = now();
+  const instance = await startMockInstance({
+    distDir: arg("dist"),
+    port: Number(arg("port") ?? 8090),
+    newTaskDaemon: daemon,
+    tasks: [
+      {
+        id: "demo0000000001",
+        userId: "u-alice",
+        title: "Draft the Q3 supplier summary",
+        model: MODELS.default,
+        state: daemon ? "running" : "paused",
+        busy: null,
+        error: null,
+        pausedReason: daemon ? null : "idle",
+        createdAt: t,
+        updatedAt: t,
+        connected: Boolean(daemon),
+      },
+    ],
+    daemons: daemon ? { demo0000000001: daemon } : {},
+  });
+  console.log(
+    `[mock-instance] ${instance.url} (sign in: set the cookie CF_Authorization=alice@example.org)`,
+  );
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
+  void main();
+}

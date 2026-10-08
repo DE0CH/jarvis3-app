@@ -86,6 +86,8 @@ import { projectIconCache } from "@/projects/icon-cache";
 import { nativePerformanceTrace } from "@/performance/native-trace";
 import { revokePushNotifications } from "@/push-notifications";
 import { createAppWebSocketFactory } from "./websocket-factory";
+import { jarvis3DaemonUrl } from "@/jarvis3/daemon-endpoint";
+import { isJarvis3 } from "@/jarvis3/config";
 
 export type HostRuntimeConnectionStatus = "idle" | "connecting" | "online" | "offline" | "error";
 export type PairingNavigationTarget = "openProject" | "hostRoot" | "hostSettings";
@@ -578,9 +580,11 @@ function createDefaultDeps(): HostRuntimeControllerDeps {
         return new DaemonClient({
           ...base,
           ...webSocketConfig,
-          url: buildDaemonWebSocketUrl(connection.endpoint, {
-            useTls: connection.useTls ?? false,
-          }),
+          url:
+            jarvis3DaemonUrl(connection.endpoint) ??
+            buildDaemonWebSocketUrl(connection.endpoint, {
+              useTls: connection.useTls ?? false,
+            }),
         });
       }
       return new DaemonClient({
@@ -1570,7 +1574,7 @@ export class HostRuntimeStore {
       return;
     }
 
-    if (shouldUseDesktopDaemon()) {
+    if (shouldUseDesktopDaemon() || isJarvis3) {
       return;
     }
 

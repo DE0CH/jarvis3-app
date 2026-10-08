@@ -78,6 +78,18 @@ const variants = {
       fallbackRelativePath: "./.secrets/GoogleService-Info.prod.plist",
     }),
   },
+  // Jarvis 3 (DE0CH/jarvis3): an organisation's agent platform (JARVIS3.md at the repo root).
+  // The web build is served by the instance (its origin is the instance URL); an iOS build
+  // names its instance and bundle id.
+  jarvis3: {
+    name: process.env.JARVIS3_APP_NAME ?? "Jarvis",
+    packageId: process.env.JARVIS3_BUNDLE_ID ?? "org.example.jarvis",
+    jarvis: {
+      version: 3,
+      url: process.env.JARVIS3_INSTANCE_URL ?? "https://jarvis.example.org",
+      scheme: process.env.JARVIS3_SCHEME ?? "jarvis3",
+    },
+  },
   development: {
     name: "Paseo Debug",
     packageId: "sh.paseo.debug",
@@ -102,7 +114,7 @@ export default {
     version: nativeReleaseVersion.appVersion,
     orientation: "portrait",
     icon: "./assets/images/icon.png",
-    scheme: "paseo",
+    scheme: variant.jarvis ? ["paseo", variant.jarvis.scheme] : "paseo",
     userInterfaceStyle: "automatic",
     newArchEnabled: true,
     ios: {
@@ -189,10 +201,16 @@ export default {
       fdroidBuild: isFdroidBuild,
       profileBuild: isProfileBuild,
       router: {},
-      eas: {
-        projectId: "0e7f65ce-0367-46c8-a238-2b65963d235a",
-      },
+      ...(variant.jarvis ? { jarvis: variant.jarvis } : {}),
+      // Upstream's EAS project and owner are getpaseo's; the jarvis3 variant builds without EAS.
+      ...(variant.jarvis
+        ? {}
+        : {
+            eas: {
+              projectId: "0e7f65ce-0367-46c8-a238-2b65963d235a",
+            },
+          }),
     },
-    owner: "getpaseo",
+    ...(variant.jarvis ? {} : { owner: "getpaseo" }),
   },
 };

@@ -13,10 +13,13 @@ import {
   useLastWorkspaceSelection,
 } from "@/stores/navigation-active-workspace-store";
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
+import { Jarvis3Index } from "@/jarvis3/index-route";
 
 const isDesktop = shouldUseDesktopDaemon();
 
-export default function Index() {
+export default Jarvis3Index ?? Index;
+
+function Index() {
   const pathname = usePathname();
   const bootstrapState = useHostRuntimeBootstrapState();
   const anyOnlineHostServerId = useEarliestOnlineHostServerId();

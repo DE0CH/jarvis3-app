@@ -6,6 +6,7 @@ import {
 } from "@getpaseo/client/internal/daemon-client";
 import type { DaemonClientConfig } from "@getpaseo/client/internal/daemon-client";
 import type { HostConnection } from "@/types/host-connection";
+import { jarvis3DaemonUrl } from "@/jarvis3/daemon-endpoint";
 import { getOrCreateClientId } from "./client-id";
 import { resolveAppVersion } from "./app-version";
 import {
@@ -185,7 +186,9 @@ export async function buildClientConfig(
   if (connection.type === "directTcp") {
     return {
       ...base,
-      url: buildDaemonWebSocketUrl(connection.endpoint, { useTls: connection.useTls ?? false }),
+      url:
+        jarvis3DaemonUrl(connection.endpoint) ??
+        buildDaemonWebSocketUrl(connection.endpoint, { useTls: connection.useTls ?? false }),
     };
   }
 

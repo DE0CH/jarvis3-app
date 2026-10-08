@@ -1,0 +1,398 @@
+// Pure decisions for the Jarvis 3 screens (unit-tested in plan.test.ts). No React Native here.
+import type { ApiError, ErrorCode, PersonalLayerView, TaskState, TaskView } from "./api-types";
+
+// ---- instance URL -----------------------------------------------------------------------
+
+/** On the web the app is served by the instance itself, so the page's origin is the instance. */
+export function resolveInstanceUrl(input: {
+  platform: string;
+  extraUrl: string | null | undefined;
+  origin: string | null | undefined;
+}): string | null {
+  if (input.platform === "web") return input.origin ? stripSlash(input.origin) : null;
+  return input.extraUrl ? stripSlash(input.extraUrl) : null;
+}
+
+function stripSlash(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+// ---- tasks ------------------------------------------------------------------------------
+
+export type Tone = "ok" | "busy" | "idle" | "error" | "muted";
+
+export interface TaskPresentation {
+  label: string;
+  tone: Tone;
+  canOpen: boolean;
+  canResume: boolean;
+  canPause: boolean;
+  /** A short explanation shown under the title, or null. */
+  detail: string | null;
+}
+
+const PAUSED_REASON: Record<NonNullable<TaskView["pausedReason"]>, string> = {
+  user: "Paused",
+  idle: "Paused after being idle",
+  machine_hours_cap: "Paused: your monthly machine hours are used up",
+  instance_budget: "Paused: the organisation's monthly budget is used up",
+  offboarded: "Paused: access was removed",
+};
+
+export function presentTask(task: TaskView): TaskPresentation {
+  const busy = task.busy !== null;
+  const base: TaskPresentation = {
+    label: stateLabel(task.state),
+    tone: "muted",
+    canOpen: false,
+    canResume: false,
+    canPause: false,
+    detail: task.error,
+  };
+  switch (task.state) {
+    case "starting":
+      return {
+        ...base,
+        tone: "busy",
+        label: busy && task.busy?.kind === "resuming" ? "Resuming…" : "Starting…",
+      };
+    case "running":
+      return { ...base, tone: "ok", canOpen: task.connected, canPause: !busy };
+    case "idle":
+      return { ...base, tone: "idle", canOpen: task.connected, canPause: !busy };
+    case "pausing":
+      return { ...base, tone: "busy" };
+    case "paused":
+      return {
+        ...base,
+        tone: "muted",
+        label: task.pausedReason ? PAUSED_REASON[task.pausedReason] : "Paused",
+        canResume: !busy && task.pausedReason !== "offboarded",
+      };
+    case "destroying":
+      return { ...base, tone: "busy" };
+    case "archived":
+      return { ...base, tone: "muted" };
+    case "failed":
+      return { ...base, tone: "error" };
+  }
+}
+
+function stateLabel(state: TaskState): string {
+  switch (state) {
+    case "starting":
+      return "Starting…";
+    case "running":
+      return "Working";
+    case "idle":
+      return "Waiting for you";
+    case "pausing":
+      return "Pausing…";
+    case "paused":
+      return "Paused";
+    case "destroying":
+      return "Deleting…";
+    case "archived":
+      return "Archived";
+    case "failed":
+      return "Could not start";
+  }
+}
+
+/** Whether the list should be fetched again soon: something is changing state. */
+export function taskListNeedsRefresh(tasks: readonly TaskView[]): boolean {
+  return tasks.some(
+    (task) =>
+      task.busy !== null ||
+      task.state === "starting" ||
+      task.state === "pausing" ||
+      task.state === "destroying" ||
+      ((task.state === "running" || task.state === "idle") && !task.connected),
+  );
+}
+
+/** The list shown to the user: archived tasks last, otherwise the server's order (newest first). */
+export function orderTasks(tasks: readonly TaskView[]): TaskView[] {
+  const live = tasks.filter((task) => task.state !== "archived");
+  const archived = tasks.filter((task) => task.state === "archived");
+  return [...live, ...archived];
+}
+
+/** Replaces (or adds at the top) one task in a list, keeping the order otherwise. */
+export function mergeTask(tasks: readonly TaskView[], task: TaskView): TaskView[] {
+  const index = tasks.findIndex((existing) => existing.id === task.id);
+  if (index < 0) return [task, ...tasks];
+  const next = tasks.slice();
+  next[index] = task;
+  return next;
+}
+
+// ---- the task's chat --------------------------------------------------------------------
+
+export interface DaemonAgentSummary {
+  id: string;
+  createdAt?: string | Date | null;
+  lastActivityAt?: string | Date | null;
+  archivedAt?: string | Date | null;
+  parentAgentId?: string | null;
+}
+
+function toTime(value: string | Date | null | undefined): number {
+  if (!value) return 0;
+  const time = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
+}
+
+/**
+ * The agent a task's chat shows: the session starts one top-level agent with the first prompt;
+ * if there are several, the oldest top-level one that is not archived (the task's own), else the
+ * newest of any.
+ */
+export function pickTaskAgent(agents: readonly DaemonAgentSummary[]): string | null {
+  const live = agents.filter((agent) => !agent.archivedAt);
+  const topLevel = live.filter((agent) => !agent.parentAgentId);
+  const pool = topLevel.length > 0 ? topLevel : live;
+  if (pool.length === 0) return null;
+  const sorted = pool.slice().sort((a, b) => toTime(a.createdAt) - toTime(b.createdAt));
+  return sorted[0]?.id ?? null;
+}
+
+// ---- errors -----------------------------------------------------------------------------
+
+export class Jarvis3Error extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: ErrorCode | "signed_out" | "network",
+  ) {
+    super(message);
+    this.name = "Jarvis3Error";
+  }
+}
+
+const FRIENDLY: Partial<Record<ErrorCode, string>> = {
+  machine_hours_cap:
+    "Your machine hours for this month are used up. Ask your admin to raise your limit.",
+  instance_budget: "The organisation's monthly budget is used up. Ask your admin.",
+  too_many_requests: "Too many attempts. Try again in a minute.",
+  upstream: "A provider didn't answer. Try again shortly.",
+  unavailable: "The task isn't connected yet.",
+  forbidden: "This account has no access to this instance.",
+  unauthenticated: "You're signed out.",
+};
+
+/** Turns an HTTP answer's status and body into a Jarvis3Error with a message fit to show. */
+export function errorFromResponse(status: number, body: unknown): Jarvis3Error {
+  const parsed = isApiError(body) ? body.error : null;
+  const code: ErrorCode = parsed?.code ?? codeForStatus(status);
+  const fallback = parsed?.message ?? `Request failed (${status}).`;
+  const message = FRIENDLY[code] ?? (code === "not_found" ? "Not found." : fallback);
+  if (code === "conflict" || code === "busy" || code === "bad_request") {
+    return new Jarvis3Error(parsed?.message ? capitalise(parsed.message) : message, status, code);
+  }
+  return new Jarvis3Error(message, status, code);
+}
+
+function codeForStatus(status: number): ErrorCode {
+  if (status === 404) return "not_found";
+  if (status >= 500) return "internal";
+  return "bad_request";
+}
+
+function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function isApiError(body: unknown): body is ApiError {
+  if (!body || typeof body !== "object") return false;
+  const error = (body as { error?: unknown }).error;
+  return (
+    !!error &&
+    typeof error === "object" &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    typeof (error as { message?: unknown }).message === "string"
+  );
+}
+
+/**
+ * Cloudflare Access answers a refused or expired credential with a redirect to its login page
+ * (HTML), not with the API's JSON. Treat that as signed out.
+ */
+export function isAccessRefusal(input: {
+  finalUrl: string;
+  status: number;
+  contentType: string | null;
+}): boolean {
+  if (/\/cdn-cgi\/access\/login|cloudflareaccess\.com/.test(input.finalUrl)) return true;
+  if (input.status === 302 || input.status === 303) return true;
+  return input.status === 200 && !!input.contentType && input.contentType.includes("text/html");
+}
+
+// ---- device pairing (iOS) -----------------------------------------------------------------
+
+export type PairAnswer =
+  | { status: "paired"; id: string; clientId: string; clientSecret: string }
+  | { status: "error"; error: string; httpStatus: string | null };
+
+/** Reads `<scheme>://paired?state=…&id=…&clientId=…&clientSecret=…` (or `…&error=…&status=…`). */
+export function parsePairRedirect(url: string, expectedState: string): PairAnswer {
+  const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+  const params = new URLSearchParams(query.split("#")[0]);
+  if (params.get("state") !== expectedState) {
+    return {
+      status: "error",
+      error: "The sign-in answer didn't match this request. Try again.",
+      httpStatus: null,
+    };
+  }
+  const error = params.get("error");
+  if (error) return { status: "error", error, httpStatus: params.get("status") };
+  const id = params.get("id");
+  const clientId = params.get("clientId");
+  const clientSecret = params.get("clientSecret");
+  if (!id || !clientId || !clientSecret) {
+    return {
+      status: "error",
+      error: "The sign-in answer was incomplete. Try again.",
+      httpStatus: null,
+    };
+  }
+  return { status: "paired", id, clientId, clientSecret };
+}
+
+export function pairErrorMessage(answer: Extract<PairAnswer, { status: "error" }>): string {
+  if (answer.httpStatus === "429") return "One sign-in every 30 seconds. Try again shortly.";
+  if (answer.httpStatus === "403") return "This account has no access to this instance.";
+  return answer.error;
+}
+
+// ---- personal layer -----------------------------------------------------------------------
+
+export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const SKILL_PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
+const SKILL_MAX_BYTES = 256 * 1024;
+export const INSTRUCTIONS_MAX = 64_000;
+
+/** Why a skill can't be saved, or null when it can (the server's rules, checked before sending). */
+export function validateSkill(name: string, files: Record<string, string>): string | null {
+  if (!SKILL_NAME_RE.test(name)) {
+    return "Skill names use lowercase letters, digits and dashes, and start with a letter or digit.";
+  }
+  const paths = Object.keys(files);
+  if (paths.length === 0 || paths.length > 50) return "A skill has 1 to 50 files.";
+  if (!paths.includes("SKILL.md")) return "A skill needs a SKILL.md file.";
+  for (const path of paths) {
+    const segments = path.split("/");
+    if (
+      segments.some(
+        (segment) => segment === "." || segment === ".." || !SKILL_PATH_SEGMENT_RE.test(segment),
+      )
+    ) {
+      return `"${path}" isn't a valid file name.`;
+    }
+  }
+  const bytes = paths.reduce(
+    (sum, path) => sum + utf8Length(path) + utf8Length(files[path] ?? ""),
+    0,
+  );
+  if (bytes > SKILL_MAX_BYTES) return "A skill's files are limited to 256 KiB in total.";
+  return null;
+}
+
+function utf8Length(text: string): number {
+  let bytes = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code < 0x10000) bytes += 3;
+    else bytes += 4;
+  }
+  return bytes;
+}
+
+export function isLayerEmpty(
+  layer: Pick<PersonalLayerView, "instructions" | "skills" | "notes">,
+): boolean {
+  return layer.instructions.trim() === "" && layer.skills.length === 0 && layer.notes.length === 0;
+}
+
+/** Undo is offered while a reset version exists to go back to. */
+export function canUndoLayer(layer: Pick<PersonalLayerView, "versions">): boolean {
+  return layer.versions.length > 0;
+}
+
+// ---- admin --------------------------------------------------------------------------------
+
+/**
+ * Reads an admin's limit field: empty = clear the override (role default applies again),
+ * otherwise a number ≥ 0.
+ */
+export function parseLimitInput(
+  text: string,
+): { ok: true; value: number | null } | { ok: false; error: string } {
+  const trimmed = text.trim();
+  if (trimmed === "") return { ok: true, value: null };
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 0)
+    return { ok: false, error: "Enter a number of 0 or more, or leave it empty." };
+  return { ok: true, value };
+}
+
+export function formatLimit(value: number | null, unit: "usd" | "hours"): string {
+  if (value === null) return "No limit";
+  return unit === "usd" ? `USD ${value.toFixed(2)}` : `${value} h`;
+}
+
+// ---- the chat screen's phase --------------------------------------------------------------
+
+export type ChatPhase =
+  | { kind: "loading" }
+  | { kind: "not_found" }
+  | { kind: "error"; message: string }
+  | { kind: "starting"; label: string }
+  | { kind: "paused"; label: string; canResume: boolean }
+  | { kind: "closed"; label: string }
+  | { kind: "connect" }
+  | { kind: "connecting" }
+  | { kind: "waiting_agent" }
+  | { kind: "chat"; serverId: string; agentId: string };
+
+/**
+ * What the task screen shows. `hostServerId` is the Paseo host already made for this task
+ * (null until the app has probed the daemon through the proxy), `hostOnline` its connection,
+ * `agentId` the agent picked from that host (pickTaskAgent).
+ */
+export function planTaskChat(input: {
+  task: TaskView | null;
+  loadError: Jarvis3Error | null;
+  hostServerId: string | null;
+  hostOnline: boolean;
+  agentId: string | null;
+}): ChatPhase {
+  const { task, loadError } = input;
+  if (!task) {
+    if (loadError?.code === "not_found") return { kind: "not_found" };
+    if (loadError) return { kind: "error", message: loadError.message };
+    return { kind: "loading" };
+  }
+  const view = presentTask(task);
+  switch (task.state) {
+    case "paused":
+      return { kind: "paused", label: view.label, canResume: view.canResume };
+    case "pausing":
+    case "destroying":
+    case "archived":
+    case "failed":
+      return { kind: "closed", label: view.label };
+    case "starting":
+      return { kind: "starting", label: view.label };
+    case "running":
+    case "idle":
+      if (!task.connected) return { kind: "starting", label: "Connecting to the task…" };
+      if (!input.hostServerId) return { kind: "connect" };
+      if (!input.hostOnline) return { kind: "connecting" };
+      if (!input.agentId) return { kind: "waiting_agent" };
+      return { kind: "chat", serverId: input.hostServerId, agentId: input.agentId };
+  }
+}

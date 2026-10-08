@@ -45,3 +45,7 @@ app-example
 # generated native folders
 /ios
 /android
+
+# jarvis3 variant (JARVIS3.md)
+dist-jarvis3/
+e2e-artifacts/
