@@ -97,6 +97,9 @@ jobs:
 
       - name: Web build of the jarvis3 variant
         working-directory: packages/app
+        env:
+          # Metro outgrows Node's default ~2 GB heap on the full app (as in upstream's desktop build).
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npm run build:web:jarvis3
 
       - name: Playwright e2e against the mock instance
