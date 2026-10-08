@@ -102,7 +102,7 @@ npm run typecheck --workspace=@getpaseo/app
 cd packages/app
 npx vitest run --project unit src/jarvis3                 # jarvis3 unit tests
 npm run test                                              # the app's whole unit suite (upstream's too)
-npm run build:web:jarvis3                                 # static web export -> dist-jarvis3/
+NODE_OPTIONS=--max-old-space-size=6144 npm run build:web:jarvis3   # web export -> dist-jarvis3/ (Metro needs > 2 GB)
 npm --prefix ../.. run build:server                       # the e2e runs a real Paseo daemon
 npm run test:e2e:jarvis3                                  # Playwright vs the mock instance
 ```
