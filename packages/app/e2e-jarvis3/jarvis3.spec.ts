@@ -151,7 +151,7 @@ test("New task: first prompt and model, then the task's page", async ({ page }) 
   const created = instance.state.tasks.find((t) => t.title.startsWith("Summarise the onboarding"));
   expect(created?.model).toBe("anthropic/claude-example");
   await page.getByTestId("jarvis3-nav-tasks").filter({ visible: true }).click();
-  await expect(page.getByTestId("jarvis3-tasks")).toContainText(
+  await expect(page.getByTestId("jarvis3-tasks").filter({ visible: true })).toContainText(
     "Summarise the onboarding handbook",
   );
 });
