@@ -63,8 +63,10 @@ jobs:
           npx oxlint packages/app/src/jarvis3 "packages/app/src/app/(jarvis)" packages/app/e2e-jarvis3
           packages/app/src/runtime packages/app/src/composer/index.tsx packages/app/src/utils/test-daemon-connection.ts
 
+      # upstream's unistyles-module-scope test scans all of src under a 5 s limit and times out
+      # now and then on a busy runner; retries absorb that without touching upstream's test.
       - name: App unit tests (upstream + jarvis3)
-        run: npm run test --workspace=@getpaseo/app
+        run: npm run test --workspace=@getpaseo/app -- --retry=2
 
   web-e2e:
     name: jarvis3 web build + e2e
