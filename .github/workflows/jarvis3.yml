@@ -1,0 +1,127 @@
+# The jarvis3 variant (JARVIS3.md): typecheck, the app's unit tests (upstream's and jarvis3's),
+# upstream's CI-contract tests, a web build of the variant and its Playwright e2e against a mock
+# Jarvis 3 instance. No signing, no TestFlight. Screenshots go to the run's artifacts.
+# Also called by jarvis3-upstream-sync.yml on the rebased branch.
+name: jarvis3
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to check"
+        type: string
+        required: true
+
+concurrency:
+  group: jarvis3-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: typecheck + unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Upstream CI-contract tests
+        run: node --test scripts/ci-workflow.test.mjs scripts/daemon-launch-contract.test.mjs
+
+      - name: Install Playwright browsers (browser unit tests)
+        timeout-minutes: 10
+        run: npx playwright install chromium
+
+      - name: Build app dependencies
+        run: npm run build:app-deps
+
+      - name: Typecheck the app
+        run: npm run typecheck --workspace=@getpaseo/app
+
+      - name: Lint the jarvis3 code and hooks
+        run: >-
+          npx oxlint packages/app/src/jarvis3 "packages/app/src/app/(jarvis)" packages/app/e2e-jarvis3
+          packages/app/src/runtime packages/app/src/composer/index.tsx packages/app/src/utils/test-daemon-connection.ts
+
+      - name: App unit tests (upstream + jarvis3)
+        run: npm run test --workspace=@getpaseo/app
+
+  web-e2e:
+    name: jarvis3 web build + e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Install Playwright browsers
+        timeout-minutes: 10
+        run: npx playwright install --with-deps chromium
+
+      - name: Build the server stack (the e2e runs a real Paseo daemon)
+        run: npm run build:server
+
+      - name: Build app dependencies
+        run: npm run build --workspace=@getpaseo/expo-two-way-audio
+
+      - name: Web build of the jarvis3 variant
+        working-directory: packages/app
+        run: npm run build:web:jarvis3
+
+      - name: Playwright e2e against the mock instance
+        working-directory: packages/app
+        env:
+          JARVIS3_SCREENSHOT_DIR: ${{ runner.temp }}/jarvis3-screenshots
+        run: npm run test:e2e:jarvis3
+
+      - name: Upload screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis3-screenshots
+          path: ${{ runner.temp }}/jarvis3-screenshots
+          if-no-files-found: warn
+
+      - name: Upload the web build
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis3-web
+          path: packages/app/dist-jarvis3
+
+      - name: Upload Playwright traces
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis3-playwright-traces
+          path: packages/app/test-results
+          if-no-files-found: ignore

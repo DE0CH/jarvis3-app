@@ -106,6 +106,7 @@ import {
   persistAttachmentFromFileUri,
 } from "@/attachments/service";
 import { resolveAgentControlsMode } from "@/composer/agent-controls/mode";
+import { isJarvis3 } from "@/jarvis3/config";
 import { resolveComposerInputMode, type ComposerInputMode } from "@/composer/input-mode";
 import { resolveActiveSendBehavior } from "./input/state";
 import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
@@ -2175,7 +2176,8 @@ function ComposerContentImpl({
         serverId,
         focusInput,
         isCompactLayout,
-        showAgentControls: mode.showAgentControls,
+        // jarvis3: the model comes from the instance's curated list at New task (JARVIS3.md).
+        showAgentControls: mode.showAgentControls && !isJarvis3,
       }),
     [agentControls, agentId, focusInput, isCompactLayout, mode.showAgentControls, serverId],
   );

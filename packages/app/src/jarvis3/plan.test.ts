@@ -1,0 +1,293 @@
+import { describe, expect, it } from "vitest";
+import type { TaskView } from "./api-types";
+import {
+  canUndoLayer,
+  errorFromResponse,
+  formatLimit,
+  isAccessRefusal,
+  isLayerEmpty,
+  Jarvis3Error,
+  mergeTask,
+  orderTasks,
+  pairErrorMessage,
+  parseLimitInput,
+  parsePairRedirect,
+  pickTaskAgent,
+  planTaskChat,
+  presentTask,
+  resolveInstanceUrl,
+  taskListNeedsRefresh,
+  validateSkill,
+} from "./plan";
+
+function task(patch: Partial<TaskView> = {}): TaskView {
+  return {
+    id: "7ce0326a5435ab61",
+    userId: "u1",
+    title: "Write the weekly report",
+    model: "anthropic/claude-x",
+    state: "running",
+    busy: null,
+    error: null,
+    pausedReason: null,
+    createdAt: "2026-10-08T12:00:00.000Z",
+    updatedAt: "2026-10-08T12:00:00.000Z",
+    connected: true,
+    ...patch,
+  };
+}
+
+describe("resolveInstanceUrl", () => {
+  it("uses the page's origin on the web", () => {
+    expect(
+      resolveInstanceUrl({
+        platform: "web",
+        extraUrl: "https://jarvis.example.org",
+        origin: "https://a.example.org",
+      }),
+    ).toBe("https://a.example.org");
+  });
+  it("uses the configured URL on iOS, without a trailing slash", () => {
+    expect(
+      resolveInstanceUrl({
+        platform: "ios",
+        extraUrl: "https://jarvis.example.org/",
+        origin: null,
+      }),
+    ).toBe("https://jarvis.example.org");
+  });
+  it("is null when nothing is known", () => {
+    expect(resolveInstanceUrl({ platform: "ios", extraUrl: undefined, origin: null })).toBeNull();
+  });
+});
+
+describe("presentTask", () => {
+  it("opens a connected running task and offers Pause", () => {
+    const view = presentTask(task());
+    expect(view).toMatchObject({ canOpen: true, canPause: true, canResume: false, tone: "ok" });
+  });
+  it("does not open a running task whose session is not connected", () => {
+    expect(presentTask(task({ connected: false })).canOpen).toBe(false);
+  });
+  it("offers Start for a paused task and names the reason", () => {
+    const view = presentTask(task({ state: "paused", pausedReason: "idle", connected: false }));
+    expect(view.canResume).toBe(true);
+    expect(view.label).toBe("Paused after being idle");
+  });
+  it("does not offer Start while an operation runs or for an offboarded user", () => {
+    expect(
+      presentTask(
+        task({ state: "paused", busy: { kind: "resuming", since: "x" }, connected: false }),
+      ).canResume,
+    ).toBe(false);
+    expect(
+      presentTask(task({ state: "paused", pausedReason: "offboarded", connected: false }))
+        .canResume,
+    ).toBe(false);
+  });
+  it("shows the last error as detail", () => {
+    expect(presentTask(task({ state: "failed", error: "no machine" })).detail).toBe("no machine");
+  });
+  it("labels a resume in progress", () => {
+    expect(
+      presentTask(task({ state: "starting", busy: { kind: "resuming", since: "x" } })).label,
+    ).toBe("Resuming…");
+  });
+});
+
+describe("task list", () => {
+  it("refreshes while something changes state", () => {
+    expect(taskListNeedsRefresh([task()])).toBe(false);
+    expect(taskListNeedsRefresh([task({ state: "starting" })])).toBe(true);
+    expect(taskListNeedsRefresh([task({ connected: false })])).toBe(true);
+    expect(
+      taskListNeedsRefresh([task({ state: "paused", busy: { kind: "resuming", since: "x" } })]),
+    ).toBe(true);
+    expect(taskListNeedsRefresh([task({ state: "paused", connected: false })])).toBe(false);
+  });
+  it("puts archived tasks last and keeps the server's order otherwise", () => {
+    const a = task({ id: "a", state: "archived" });
+    const b = task({ id: "b" });
+    const c = task({ id: "c", state: "paused" });
+    expect(orderTasks([a, b, c]).map((t) => t.id)).toEqual(["b", "c", "a"]);
+  });
+  it("merges a task in place, or adds it at the top", () => {
+    const list = [task({ id: "a" }), task({ id: "b" })];
+    expect(mergeTask(list, task({ id: "b", title: "new" })).map((t) => t.title)).toEqual([
+      "Write the weekly report",
+      "new",
+    ]);
+    expect(mergeTask(list, task({ id: "c" })).map((t) => t.id)).toEqual(["c", "a", "b"]);
+  });
+});
+
+describe("pickTaskAgent", () => {
+  it("picks the oldest live top-level agent", () => {
+    expect(
+      pickTaskAgent([
+        { id: "sub", createdAt: "2026-10-08T12:00:00Z", parentAgentId: "main" },
+        { id: "later", createdAt: "2026-10-08T12:05:00Z", parentAgentId: null },
+        { id: "main", createdAt: "2026-10-08T11:59:00Z", parentAgentId: null },
+      ]),
+    ).toBe("main");
+  });
+  it("skips archived agents and is null without any", () => {
+    expect(pickTaskAgent([{ id: "a", archivedAt: "2026-10-08T12:00:00Z" }])).toBeNull();
+    expect(pickTaskAgent([])).toBeNull();
+  });
+  it("accepts Date values", () => {
+    expect(
+      pickTaskAgent([
+        { id: "b", createdAt: new Date("2026-10-08T12:01:00Z") },
+        { id: "a", createdAt: new Date("2026-10-08T12:00:00Z") },
+      ]),
+    ).toBe("a");
+  });
+});
+
+describe("planTaskChat", () => {
+  const base = { loadError: null, hostServerId: null, hostOnline: false, agentId: null };
+  it("is loading, then not found for a 404 (someone else's task looks the same)", () => {
+    expect(planTaskChat({ ...base, task: null }).kind).toBe("loading");
+    expect(
+      planTaskChat({
+        ...base,
+        task: null,
+        loadError: new Jarvis3Error("Not found.", 404, "not_found"),
+      }).kind,
+    ).toBe("not_found");
+  });
+  it("walks starting → connect → connecting → waiting for the agent → chat", () => {
+    expect(
+      planTaskChat({ ...base, task: task({ state: "starting", connected: false }) }).kind,
+    ).toBe("starting");
+    expect(planTaskChat({ ...base, task: task() }).kind).toBe("connect");
+    expect(planTaskChat({ ...base, task: task(), hostServerId: "srv" }).kind).toBe("connecting");
+    expect(
+      planTaskChat({ ...base, task: task(), hostServerId: "srv", hostOnline: true }).kind,
+    ).toBe("waiting_agent");
+    expect(
+      planTaskChat({ ...base, task: task(), hostServerId: "srv", hostOnline: true, agentId: "ag" }),
+    ).toEqual({
+      kind: "chat",
+      serverId: "srv",
+      agentId: "ag",
+    });
+  });
+  it("shows paused with Start, and closed states", () => {
+    expect(
+      planTaskChat({
+        ...base,
+        task: task({ state: "paused", pausedReason: "user", connected: false }),
+      }),
+    ).toEqual({
+      kind: "paused",
+      label: "Paused",
+      canResume: true,
+    });
+    expect(
+      planTaskChat({ ...base, task: task({ state: "archived", connected: false }) }).kind,
+    ).toBe("closed");
+  });
+});
+
+describe("errors", () => {
+  it("reads the API's error body", () => {
+    const error = errorFromResponse(409, {
+      error: { code: "busy", message: "another operation is running" },
+    });
+    expect(error.code).toBe("busy");
+    expect(error.message).toBe("Another operation is running");
+  });
+  it("explains caps in plain words", () => {
+    expect(
+      errorFromResponse(429, { error: { code: "machine_hours_cap", message: "cap" } }).message,
+    ).toMatch(/machine hours/);
+  });
+  it("falls back on the status when the body isn't the API's", () => {
+    expect(errorFromResponse(404, null).code).toBe("not_found");
+    expect(errorFromResponse(502, "oops").code).toBe("internal");
+  });
+  it("recognises Access's login page", () => {
+    expect(
+      isAccessRefusal({
+        finalUrl: "https://t.cloudflareaccess.com/cdn-cgi/access/login/x",
+        status: 200,
+        contentType: "text/html",
+      }),
+    ).toBe(true);
+    expect(
+      isAccessRefusal({
+        finalUrl: "https://i.example.org/api/me",
+        status: 200,
+        contentType: "application/json",
+      }),
+    ).toBe(false);
+    expect(
+      isAccessRefusal({
+        finalUrl: "https://i.example.org/api/me",
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("parsePairRedirect", () => {
+  it("reads a successful pairing", () => {
+    expect(
+      parsePairRedirect("jarvis3://paired?state=s1&id=d1&clientId=c&clientSecret=x", "s1"),
+    ).toEqual({
+      status: "paired",
+      id: "d1",
+      clientId: "c",
+      clientSecret: "x",
+    });
+  });
+  it("refuses a different state", () => {
+    expect(
+      parsePairRedirect("jarvis3://paired?state=other&id=d1&clientId=c&clientSecret=x", "s1")
+        .status,
+    ).toBe("error");
+  });
+  it("reads an error with its HTTP status", () => {
+    const answer = parsePairRedirect("jarvis3://paired?state=s1&error=too%20soon&status=429", "s1");
+    expect(answer).toEqual({ status: "error", error: "too soon", httpStatus: "429" });
+    if (answer.status === "error") expect(pairErrorMessage(answer)).toMatch(/30 seconds/);
+  });
+});
+
+describe("personal layer", () => {
+  it("validates skills like the server", () => {
+    expect(validateSkill("invoices", { "SKILL.md": "x" })).toBeNull();
+    expect(validateSkill("Invoices", { "SKILL.md": "x" })).toMatch(/lowercase/);
+    expect(validateSkill("invoices", { "README.md": "x" })).toMatch(/SKILL.md/);
+    expect(validateSkill("invoices", { "SKILL.md": "x", "../evil": "x" })).toMatch(
+      /valid file name/,
+    );
+    expect(validateSkill("invoices", { "SKILL.md": "x".repeat(300 * 1024) })).toMatch(/256 KiB/);
+    expect(validateSkill("invoices", { "SKILL.md": "x", "refs/vendors.md": "y" })).toBeNull();
+  });
+  it("knows when the layer is empty and when Undo is possible", () => {
+    expect(isLayerEmpty({ instructions: "  ", skills: [], notes: [] })).toBe(true);
+    expect(isLayerEmpty({ instructions: "German", skills: [], notes: [] })).toBe(false);
+    expect(canUndoLayer({ versions: [] })).toBe(false);
+    expect(canUndoLayer({ versions: [{ version: 1, createdAt: "x", reason: "reset" }] })).toBe(
+      true,
+    );
+  });
+});
+
+describe("admin limits", () => {
+  it("reads empty as clear, a number as an override, and refuses the rest", () => {
+    expect(parseLimitInput("")).toEqual({ ok: true, value: null });
+    expect(parseLimitInput(" 50 ")).toEqual({ ok: true, value: 50 });
+    expect(parseLimitInput("-1").ok).toBe(false);
+    expect(parseLimitInput("abc").ok).toBe(false);
+  });
+  it("formats limits", () => {
+    expect(formatLimit(null, "usd")).toBe("No limit");
+    expect(formatLimit(20, "usd")).toBe("USD 20.00");
+    expect(formatLimit(10, "hours")).toBe("10 h");
+  });
+});
