@@ -72,7 +72,11 @@ async function signIn(context: BrowserContext, email: string): Promise<void> {
   await context.addCookies([{ name: "CF_Authorization", value: email, url: instance.url }]);
 }
 
-async function shoot(page: Page, name: string): Promise<void> {
+/**
+ * Crossing Paseo's compact/desktop breakpoint remounts the route, so `prepare` (re-opening a
+ * dialog, say) runs after each viewport change, before the capture.
+ */
+async function shoot(page: Page, name: string, prepare?: () => Promise<void>): Promise<void> {
   for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     for (const [label, width, height] of [
@@ -81,6 +85,7 @@ async function shoot(page: Page, name: string): Promise<void> {
     ] as const) {
       await page.setViewportSize({ width, height });
       await page.waitForTimeout(400);
+      if (prepare) await prepare();
       await page.screenshot({ path: path.join(SHOTS, `${name}-${label}-${scheme}.png`) });
     }
   }
@@ -185,11 +190,14 @@ test("My instructions & skills: edit, Reset to company default, Undo", async ({ 
 
   await page.getByTestId("jarvis3-reset").click();
   await expect(page.getByTestId("jarvis3-layer-dialog")).toBeVisible();
-  await shoot(page, "layer-reset-dialog");
-  // The screenshots' viewport changes remount the route; open the dialog again if it closed.
-  if (!(await page.getByTestId("jarvis3-layer-dialog").isVisible())) {
-    await page.getByTestId("jarvis3-reset").click();
-  }
+  const openResetDialog = async () => {
+    if (!(await page.getByTestId("jarvis3-layer-dialog").isVisible())) {
+      await page.getByTestId("jarvis3-reset").click();
+    }
+    await expect(page.getByTestId("jarvis3-layer-dialog")).toBeVisible();
+  };
+  await shoot(page, "layer-reset-dialog", openResetDialog);
+  await openResetDialog();
   await page.getByTestId("jarvis3-layer-dialog-confirm").click();
   await expect(page.getByTestId("jarvis3-reset-banner")).toContainText("Reset to company default");
   await expect(page.getByTestId("jarvis3-skill-invoices")).toHaveCount(0);
