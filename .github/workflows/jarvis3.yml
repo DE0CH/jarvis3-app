@@ -1,7 +1,7 @@
 # The jarvis3 variant (JARVIS3.md): typecheck, the app's unit tests (upstream's and jarvis3's),
 # upstream's CI-contract tests, a web build of the variant and its Playwright e2e against a mock
 # Jarvis 3 instance. No signing, no TestFlight. Screenshots go to the run's artifacts.
-# Also called by jarvis3-upstream-sync.yml on the rebased branch.
+# Also called by jarvis3-upstream-sync.yml on the upstream-merge branch.
 name: jarvis3
 
 on:

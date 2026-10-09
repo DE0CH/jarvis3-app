@@ -6,13 +6,14 @@ one build variant, `APP_VARIANT=jarvis3`, which is the front end of a Jarvis 3 i
 `server/src/api-types.ts`). One codebase gives the instance's web page and an iOS app. Every other
 variant builds plain Paseo, unchanged.
 
-- `origin` = DE0CH/jarvis3-app; `upstream` = getpaseo/paseo. History stays linear: our commits sit
-  on top of upstream and are rebased, never merged.
+- `origin` = DE0CH/jarvis3-app; `upstream` = getpaseo/paseo. Upstream comes in by merge commits;
+  `main` only moves forward and is never force-pushed. To see everything this repo changes:
+  `git diff upstream/main...main`.
 - All jarvis3 code is in `packages/app/src/jarvis3/`, `packages/app/src/app/(jarvis)/` and
   `packages/app/e2e-jarvis3/`. Upstream files only get the hooks listed below.
 - CI: `.github/workflows/jarvis3.yml` (typecheck, the app's unit tests, upstream's CI-contract
   tests, a web build of the variant and its Playwright e2e; no signing, no TestFlight).
-  `.github/workflows/jarvis3-upstream-sync.yml` rebases onto upstream every week and opens a PR
+  `.github/workflows/jarvis3-upstream-sync.yml` merges upstream every week and opens a PR
   (below). Upstream's own workflows are disabled in this repo: they deploy, release or need
   getpaseo's secrets, and their full CI is too heavy for a private repo's minutes.
 
@@ -141,17 +142,14 @@ node --import tsx e2e-jarvis3/mock-instance.ts --dist dist-jarvis3 --port 8090
 
 ## Staying on upstream
 
-Every Monday, `jarvis3-upstream-sync.yml` rebases `main` onto `upstream/main` into the branch
-`upstream-sync`. It runs the jarvis3 checks on it and opens (or updates) a PR. A conflict fails the
-job with the conflicting files in its summary, and nothing is pushed. A rebase can't land through a
-PR merge button, so landing it is a fast-forward once the PR is green:
+Every Monday, `jarvis3-upstream-sync.yml` merges `upstream/main` into a new branch
+`upstream-sync-<upstream sha>` made from `main`, runs the jarvis3 checks on it and opens a PR. Land
+it with the merge button ("Create a merge commit"). A conflict fails the job with the conflicting
+files in its summary, and nothing is pushed. Never force-push `main` or any branch: each upstream
+commit gets its own branch, so nothing is ever rewritten.
 
-```bash
-git fetch origin && git push --force-with-lease=main:origin/main origin origin/upstream-sync:main
-```
-
-By hand: `git fetch upstream && git rebase upstream/main`, refresh the lockfile
-(`npm install --package-lock-only --ignore-scripts`), run the checks, then push. Upstream's Expo
+By hand: on a new branch, `git fetch upstream && git merge upstream/main`, refresh the lockfile
+(`npm install --package-lock-only --ignore-scripts`), run the checks, push the branch and open a PR. Upstream's Expo
 SDK is never upgraded here; upgrades come only with upstream. A workflow upstream adds later
 arrives enabled: disable it (`gh workflow disable … -R DE0CH/jarvis3-app`) unless it's wanted.
 

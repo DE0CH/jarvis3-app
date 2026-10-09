@@ -1,6 +1,8 @@
-# Weekly rebase guard (JARVIS3.md, "Staying on upstream"): rebases main onto getpaseo/paseo main
-# into the branch `upstream-sync`, runs the jarvis3 checks on it and opens or updates a PR. It
-# never pushes main. A conflict fails the job, listing the files, and pushes nothing.
+# Weekly upstream merge (JARVIS3.md, "Staying on upstream"): merges getpaseo/paseo main into a new
+# branch `upstream-sync-<upstream sha>` made from main, runs the jarvis3 checks on it and opens a PR
+# that lands with the normal merge button. Nothing is ever force-pushed: each upstream commit gets
+# its own branch, and a branch that already exists is left alone. A conflict fails the job,
+# listing the files, and pushes nothing.
 #
 # GITHUB_TOKEN can't push a branch that changes .github/workflows/*, which upstream often does.
 # The repo secret SYNC_TOKEN (a fine-grained token for this repo only: contents, pull requests and
@@ -21,12 +23,13 @@ permissions:
   pull-requests: write
 
 jobs:
-  rebase:
+  merge:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
-      changed: ${{ steps.rebase.outputs.changed }}
-      upstream: ${{ steps.rebase.outputs.upstream }}
+      changed: ${{ steps.merge.outputs.changed }}
+      upstream: ${{ steps.merge.outputs.upstream }}
+      branch: ${{ steps.merge.outputs.branch }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,79 +41,82 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Rebase onto upstream
-        id: rebase
+      - name: Merge upstream
+        id: merge
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/getpaseo/paseo.git
           git fetch --no-tags upstream main
-          echo "upstream=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+          short=$(git rev-parse --short=9 upstream/main)
+          branch="upstream-sync-${short}"
+          echo "upstream=${short}" >> "$GITHUB_OUTPUT"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
           if git merge-base --is-ancestor upstream/main HEAD; then
             echo "main already contains upstream/main" >> "$GITHUB_STEP_SUMMARY"
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! git rebase upstream/main; then
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "Branch ${branch} already exists; its PR covers this upstream commit." >> "$GITHUB_STEP_SUMMARY"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git switch -c "$branch"
+          if ! git merge --no-edit -m "Merge upstream getpaseo/paseo ${short}" upstream/main; then
             {
-              echo "## Rebase onto upstream/main conflicts"
+              echo "## Merging upstream/main conflicts"
               echo
               git diff --name-only --diff-filter=U | sed 's/^/- /'
               echo
-              echo 'Resolve by hand: `git fetch upstream && git rebase upstream/main` (JARVIS3.md).'
+              echo 'Resolve by hand: `git fetch upstream && git merge upstream/main` (JARVIS3.md).'
             } >> "$GITHUB_STEP_SUMMARY"
-            git rebase --abort
+            git merge --abort
             exit 1
           fi
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           if ! git diff --quiet package-lock.json; then
-            git commit -qam "jarvis3: refresh package-lock after rebase"
+            git commit -qam "jarvis3: refresh package-lock after merging upstream"
           fi
-          if ! git push --force origin HEAD:refs/heads/upstream-sync; then
+          if ! git push origin "HEAD:refs/heads/${branch}"; then
             {
               echo "## Push refused"
               echo
-              echo "The rebased branch likely changes .github/workflows/*, which GITHUB_TOKEN can't push."
-              echo "Add the SYNC_TOKEN secret (see the header of this workflow) or rebase by hand."
+              echo "The merge likely changes .github/workflows/*, which GITHUB_TOKEN can't push."
+              echo "Add the SYNC_TOKEN secret (see the header of this workflow) or merge by hand."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
   checks:
-    needs: rebase
-    if: ${{ needs.rebase.outputs.changed == 'true' }}
+    needs: merge
+    if: ${{ needs.merge.outputs.changed == 'true' }}
     uses: ./.github/workflows/jarvis3.yml
     with:
-      ref: upstream-sync
+      ref: ${{ needs.merge.outputs.branch }}
 
   pull-request:
-    needs: [rebase, checks]
-    if: ${{ always() && needs.rebase.outputs.changed == 'true' }}
+    needs: [merge, checks]
+    if: ${{ always() && needs.merge.outputs.changed == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Open or update the PR
+      - name: Open the PR
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
           REPO: ${{ github.repository }}
           CHECKS: ${{ needs.checks.result }}
-          UPSTREAM: ${{ needs.rebase.outputs.upstream }}
+          UPSTREAM: ${{ needs.merge.outputs.upstream }}
+          BRANCH: ${{ needs.merge.outputs.branch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           body=$(cat <<BODY
-          main rebased onto getpaseo/paseo main (${UPSTREAM}).
+          Merges getpaseo/paseo main (${UPSTREAM}) into main.
 
           jarvis3 checks: **${CHECKS}** (${RUN_URL}).
 
-          A rebase can't land through the merge button. When green, fast-forward main to this branch:
-
-              git fetch origin && git push --force-with-lease=main:origin/main origin origin/upstream-sync:main
+          Land it with the merge button ("Create a merge commit"). Close any older upstream-sync PR.
           BODY
           )
-          number=$(gh pr list -R "$REPO" --head upstream-sync --state open --json number --jq '.[0].number')
-          if [ -n "$number" ]; then
-            gh pr edit "$number" -R "$REPO" --body "$body"
-          else
-            gh pr create -R "$REPO" --base main --head upstream-sync \
-              --title "Rebase onto upstream ${UPSTREAM}" --body "$body"
-          fi
+          gh pr create -R "$REPO" --base main --head "$BRANCH" \
+            --title "Merge upstream ${UPSTREAM}" --body "$body"
