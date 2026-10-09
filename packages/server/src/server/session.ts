@@ -8,7 +8,7 @@ import type {
 } from "@getpaseo/protocol/messages";
 import { relative } from "node:path";
 import { isAbsolute } from "node:path";
-import { CreationService } from "./creation/index.js";
+import { CreationService, type CreatedAgent } from "./creation/index.js";
 import type { CreationSnapshot, AgentCreateRequest } from "@getpaseo/protocol/messages";
 import type { MessageReceipts } from "./message-receipts/index.js";
 import equal from "fast-deep-equal";
@@ -4173,7 +4173,7 @@ export class Session {
         if (!record) throw new Error("Previously created agent no longer exists");
         agent = this.buildStoredAgentPayload(record);
       } else {
-        agent = await this.createSessionAgent(msg);
+        ({ agent } = await this.createSessionAgent(msg));
       }
       this.emit({
         type: "status",
@@ -4212,7 +4212,7 @@ export class Session {
     msg: CreateAgentRequestMessage,
     agentId?: string,
     onAgentReady?: (agent: AgentSnapshotPayload) => Promise<void>,
-  ): Promise<AgentSnapshotPayload> {
+  ): Promise<CreatedAgent> {
     const {
       config,
       worktreeName,
@@ -4270,7 +4270,7 @@ export class Session {
         throw new Error(`Working directory does not exist or is not a directory: ${resolvedCwd}`);
       }
 
-      const { snapshot, liveSnapshot } = await createAgentCommand(
+      const { snapshot, liveSnapshot, initialPromptStarted } = await createAgentCommand(
         {
           agentManager: this.agentManager,
           agentStorage: this.agentStorage,
@@ -4290,6 +4290,9 @@ export class Session {
           workspaceId: resolvedIntent.intent.workspaceId,
           worktreeName,
           initialPrompt,
+          source: msg.callerAgentId
+            ? { kind: "agent-message", agentId: msg.callerAgentId }
+            : undefined,
           clientMessageId,
           outputSchema,
           images,
@@ -4324,7 +4327,7 @@ export class Session {
         { agentId: snapshot.id, provider: snapshot.provider },
         "Created agent",
       );
-      return this.buildAgentPayload(liveSnapshot);
+      return { agent: await this.buildAgentPayload(liveSnapshot), initialPromptStarted };
     } catch (error) {
       await this.createAgentLifecycleDispatch.cleanupCreatedWorktreeAfterFailedAgentCreate({
         createdWorktree: createdWorktreeForCleanup,
@@ -8094,6 +8097,9 @@ export class Session {
           agentStorage: this.agentStorage,
           agentId,
           prompt,
+          source: msg.sourceAgentId
+            ? { kind: "agent-message", agentId: msg.sourceAgentId }
+            : undefined,
           messageId: msg.messageId,
           activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
           clearPendingPermissions: true,
@@ -8111,9 +8117,13 @@ export class Session {
         await this.messageReceipts.send({
           agentId,
           messageId: msg.messageId,
-          request: { prompt, activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt" },
+          request: {
+            prompt,
+            sourceAgentId: msg.sourceAgentId,
+            activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
+          },
           prepare: async () => {
-            await this.prepareAgentMessage(agentId, msg.text);
+            if (!msg.sourceAgentId) await this.prepareAgentMessage(agentId, msg.text);
           },
           send,
         });
