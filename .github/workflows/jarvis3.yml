@@ -1,7 +1,6 @@
 # The jarvis3 variant (JARVIS3.md): typecheck, the app's unit tests (upstream's and jarvis3's),
 # upstream's CI-contract tests, a web build of the variant and its Playwright e2e against a mock
 # Jarvis 3 instance. No signing, no TestFlight. Screenshots go to the run's artifacts.
-# Also called by jarvis3-upstream-sync.yml on the upstream-merge branch.
 name: jarvis3
 
 on:
@@ -10,15 +9,9 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-  workflow_call:
-    inputs:
-      ref:
-        description: "Git ref to check"
-        type: string
-        required: true
 
 concurrency:
-  group: jarvis3-ci-${{ inputs.ref || github.ref }}
+  group: jarvis3-ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -35,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -75,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-node@v4
         with:

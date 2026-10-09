@@ -13,8 +13,7 @@ variant builds plain Paseo, unchanged.
   `packages/app/e2e-jarvis3/`. Upstream files only get the hooks listed below.
 - CI: `.github/workflows/jarvis3.yml` (typecheck, the app's unit tests, upstream's CI-contract
   tests, a web build of the variant and its Playwright e2e; no signing, no TestFlight).
-  `.github/workflows/jarvis3-upstream-sync.yml` merges upstream every week and opens a PR
-  (below). Upstream's own workflows are disabled in this repo: they deploy, release or need
+  Upstream's own workflows are disabled in this repo: they deploy, release or need
   getpaseo's secrets, and their full CI is too heavy for a private repo's minutes.
 
 ## What the variant is
@@ -142,13 +141,10 @@ node --import tsx e2e-jarvis3/mock-instance.ts --dist dist-jarvis3 --port 8090
 
 ## Staying on upstream
 
-Every Monday, `jarvis3-upstream-sync.yml` merges `upstream/main` into a new branch
-`upstream-sync-<upstream sha>` made from `main`, runs the jarvis3 checks on it and opens a PR. Land
-it with the merge button ("Create a merge commit"). A conflict fails the job with the conflicting
-files in its summary, and nothing is pushed. Never force-push `main` or any branch: each upstream
-commit gets its own branch, so nothing is ever rewritten.
+There is no automatic upstream update (Deyao, 2026-10-09). Bring in a newer upstream only when
+it's wanted, and never by force-pushing:
 
-By hand: on a new branch, `git fetch upstream && git merge upstream/main`, refresh the lockfile
+On a new branch, `git fetch upstream && git merge upstream/main`, refresh the lockfile
 (`npm install --package-lock-only --ignore-scripts`), run the checks, push the branch and open a PR. Upstream's Expo
 SDK is never upgraded here; upgrades come only with upstream. A workflow upstream adds later
 arrives enabled: disable it (`gh workflow disable … -R DE0CH/jarvis3-app`) unless it's wanted.
