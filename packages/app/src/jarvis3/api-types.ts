@@ -1,4 +1,4 @@
-// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit a0e0fe4); refresh with
+// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit 8c56697); refresh with
 // scripts/jarvis3-sync-api-types.sh. Type-only: never add runtime code here.
 // The Jarvis 3 instance API contract: request and response shapes of every route.
 // docs/API.md describes the routes and who may call them; this module is the machine-checked
@@ -195,7 +195,15 @@ export interface ModelList {
  * archived   final; the archive holds the state
  * failed     the machine could not be created; only Destroy is possible
  */
-export type TaskState = "starting" | "running" | "idle" | "pausing" | "paused" | "destroying" | "archived" | "failed";
+export type TaskState =
+  | "starting"
+  | "running"
+  | "idle"
+  | "pausing"
+  | "paused"
+  | "destroying"
+  | "archived"
+  | "failed";
 
 export interface TaskView {
   id: string;
@@ -698,7 +706,14 @@ export type ApprovalLevel = "auto" | "self" | "admin" | "owner";
  * denied    refused (`decision.note` says why)
  * cancelled the task stopped (paused, destroyed or offboarded) before a decision
  */
-export type ApprovalState = "pending" | "approved" | "executing" | "done" | "failed" | "denied" | "cancelled";
+export type ApprovalState =
+  | "pending"
+  | "approved"
+  | "executing"
+  | "done"
+  | "failed"
+  | "denied"
+  | "cancelled";
 
 /** Exactly what will happen, for the person deciding. */
 export interface ApprovalPreview {
@@ -804,11 +819,24 @@ export interface Health {
 
 /** Frames the server sends to the session's channel agent. */
 export type ServerToSessionFrame =
-  | { type: "ws-open"; id: string; path: string; protocols: string[]; headers: Record<string, string> }
+  | {
+      type: "ws-open";
+      id: string;
+      path: string;
+      protocols: string[];
+      headers: Record<string, string>;
+    }
   | { type: "ws-msg"; id: string; text?: string; data_b64?: string }
   | { type: "ws-close"; id: string; code?: number; reason?: string }
   /** An HTTP request to the local daemon (the HTTP relay). Body ≤ 1 MiB, base64. */
-  | { type: "http-req"; id: string; method: string; path: string; headers: Record<string, string>; body_b64?: string }
+  | {
+      type: "http-req";
+      id: string;
+      method: string;
+      path: string;
+      headers: Record<string, string>;
+      body_b64?: string;
+    }
   /** The app went away: stop sending the response of request `id`. */
   | { type: "http-cancel"; id: string }
   | { type: "pong" };
@@ -851,7 +879,13 @@ export interface ScheduleView {
  * machine-hour cap, the instance budget, the previous run's task still live, or the server was
  * down at the time (`missed`). `failed`: the task could not be made (`error`).
  */
-export type ScheduleRunResult = "started" | "skipped_cap" | "skipped_budget" | "skipped_overlap" | "missed" | "failed";
+export type ScheduleRunResult =
+  | "started"
+  | "skipped_cap"
+  | "skipped_budget"
+  | "skipped_overlap"
+  | "missed"
+  | "failed";
 
 export interface ScheduleRunView {
   id: number;
