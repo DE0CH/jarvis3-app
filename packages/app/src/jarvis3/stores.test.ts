@@ -115,6 +115,34 @@ describe("createJarvis3Api", () => {
     await expect(apiDown.me()).rejects.toMatchObject({ code: "network" });
   });
 
+  it("uses the suggestion, admin and archive-link routes", async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, {}));
+    const api = createJarvis3Api({
+      baseUrl: () => "https://i.example.org",
+      authHeaders: () => null,
+      credentials: "include",
+      fetch: fetch as unknown as typeof globalThis.fetch,
+    });
+    await api.suggest({ kind: "skill", name: "invoices" });
+    await api.listSuggestions();
+    await api.listSuggestions({ all: true });
+    await api.listUserTasks("u 1");
+    await api.getUserLayer("u1");
+    await api.archiveLink("t1");
+    const calls = fetch.mock.calls as unknown as [string, RequestInit][];
+    expect(
+      calls.map(([url, init]) => `${init.method} ${url.replace("https://i.example.org", "")}`),
+    ).toEqual([
+      "POST /api/users/me/layer/suggest",
+      "GET /api/suggestions",
+      "GET /api/suggestions?all=1",
+      "GET /api/tasks?userId=u%201",
+      "GET /api/users/u1/layer",
+      "GET /api/tasks/t1/archive?link=1",
+    ]);
+    expect(JSON.parse(calls[0]![1].body as string)).toEqual({ kind: "skill", name: "invoices" });
+  });
+
   it("treats Access's login page as signed out", async () => {
     const api = createJarvis3Api({
       baseUrl: () => "https://i.example.org",

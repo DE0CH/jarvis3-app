@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { TaskView } from "./api-types";
+import type { SuggestionView, TaskView } from "./api-types";
 import {
+  canDownloadArchive,
   canUndoLayer,
+  describeUsage,
+  openSuggestionFor,
+  presentSuggestion,
+  suggestionTargetLabel,
   errorFromResponse,
   formatLimit,
   isAccessRefusal,
@@ -280,6 +285,74 @@ describe("admin limits", () => {
     expect(formatLimit(null, "usd")).toBe("No limit");
     expect(formatLimit(20, "usd")).toBe("USD 20.00");
     expect(formatLimit(10, "hours")).toBe("10 h");
+  });
+});
+
+describe("admin usage summary", () => {
+  const detail = (capReached: boolean) => ({
+    limits: {
+      openrouterMonthlyUsd: 20,
+      openrouterOverride: false,
+      machineHoursPerMonth: 10,
+      machineHoursOverride: true,
+    },
+    usage: {
+      month: "2026-10",
+      machineHours: 10.04,
+      machineHoursCapReached: capReached,
+      openrouterKey: true,
+    },
+  });
+  it("shows use against the cap and says when the cap is reached", () => {
+    expect(describeUsage(detail(false))).toBe(
+      "Model spend USD 20.00; machine time 10.0 h of 10 h (set for this user) in 2026-10.",
+    );
+    expect(describeUsage(detail(true))).toMatch(/Machine-hour cap reached: tasks paused\.$/);
+  });
+});
+
+describe("suggest for everyone", () => {
+  const suggestion = (patch: Partial<SuggestionView>): SuggestionView => ({
+    id: "s1",
+    userId: "u1",
+    userEmail: "a@example.org",
+    byUserId: "u1",
+    kind: "skill",
+    name: "invoices",
+    title: "t",
+    number: 7,
+    url: "https://github.example/pr/7",
+    state: "open",
+    createdAt: "2026-10-10T00:00:00.000Z",
+    updatedAt: "2026-10-10T00:00:00.000Z",
+    checkedAt: "2026-10-10T00:00:00.000Z",
+    ...patch,
+  });
+  it("finds the open suggestion of a target only", () => {
+    const list = [
+      suggestion({ id: "a", state: "merged" }),
+      suggestion({ id: "b" }),
+      suggestion({ id: "c", kind: "instructions", name: "" }),
+      suggestion({ id: "d", kind: "note", name: "n1", state: "closed" }),
+    ];
+    expect(openSuggestionFor(list, { kind: "skill", name: "invoices" })?.id).toBe("b");
+    expect(openSuggestionFor(list, { kind: "skill", name: "other" })).toBeNull();
+    expect(openSuggestionFor(list, { kind: "instructions" })?.id).toBe("c");
+    expect(openSuggestionFor(list, { kind: "note", noteId: "n1" })).toBeNull();
+  });
+  it("labels states and targets", () => {
+    expect(presentSuggestion({ state: "open" })).toEqual({
+      label: "Waiting for an admin",
+      tone: "busy",
+    });
+    expect(presentSuggestion({ state: "merged" }).tone).toBe("ok");
+    expect(presentSuggestion({ state: "closed" }).label).toBe("Closed");
+    expect(suggestionTargetLabel({ kind: "skill", name: "invoices" })).toBe('Skill "invoices"');
+    expect(suggestionTargetLabel({ kind: "note", name: "n1" })).toBe("A note");
+  });
+  it("offers an archive download for archived tasks only", () => {
+    expect(canDownloadArchive({ state: "archived" })).toBe(true);
+    expect(canDownloadArchive({ state: "paused" })).toBe(false);
   });
 });
 

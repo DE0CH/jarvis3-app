@@ -29,8 +29,11 @@ import type {
   PersonalNote,
   ResetResult,
   SetLimitsRequest,
+  SuggestionView,
+  SuggestRequest,
   TaskView,
   UserDetail,
+  UserStatus,
 } from "../src/jarvis3/api-types";
 
 export interface MockUser {
@@ -70,6 +73,12 @@ export interface MockInstanceOptions {
   notices?: Record<string, NoticeView[]>;
   /** The app scheme `/api/devices/pair` redirects to (the server's `devices.appScheme`). */
   appScheme?: string;
+  /** userId -> a status other than active (an offboarded person). */
+  userStatus?: Record<string, UserStatus>;
+  /** Users whose machine-hour cap is reached this month. */
+  capReached?: string[];
+  /** userId -> a personal layer to start with (an offboarded person's kept layer). */
+  layers?: Record<string, LayerContent>;
 }
 
 export interface MockInstance {
@@ -80,6 +89,7 @@ export interface MockInstance {
     layers: Map<string, StoredLayer>;
     requests: string[];
     notices: Map<string, NoticeView[]>;
+    suggestions: SuggestionView[];
   };
   close(): Promise<void>;
 }
@@ -136,6 +146,7 @@ class HttpError extends Error {
 interface Ctx {
   user: MockUser;
   params: string[];
+  query: URLSearchParams;
   body: () => Promise<unknown>;
 }
 type Handler = (ctx: Ctx) => [number, unknown] | Promise<[number, unknown]>;
@@ -163,7 +174,12 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   const meOf = (user: MockUser): MeView => ({
     ...detailOf(user),
     unreadNotices: noticesOf(user.id).filter((notice) => !notice.read).length,
+    features: { suggestions: true },
   });
+  const suggestions: SuggestionView[] = [];
+  for (const [userId, content] of Object.entries(options.layers ?? {})) {
+    layers.set(userId, { current: structuredClone(content), versions: [] });
+  }
   const created = new Map<string, string>(); // `${userId}:${requestId}` -> task id
   const startDelay = options.startDelayMs ?? 1500;
   let counter = 0;
@@ -185,7 +201,11 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   const detailOf = (user: MockUser): UserDetail => {
     const override = limits.get(user.id) ?? { usd: null, hours: null };
     return {
-      user: { ...user, status: "active", createdAt: "2026-10-01T00:00:00.000Z" },
+      user: {
+        ...user,
+        status: options.userStatus?.[user.id] ?? "active",
+        createdAt: "2026-10-01T00:00:00.000Z",
+      },
       limits: {
         openrouterMonthlyUsd: override.usd ?? 20,
         openrouterOverride: override.usd !== null,
@@ -194,8 +214,8 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       },
       usage: {
         month: "2026-10",
-        machineHours: 1.5,
-        machineHoursCapReached: false,
+        machineHours: options.capReached?.includes(user.id) ? 10 : 1.5,
+        machineHoursCapReached: options.capReached?.includes(user.id) ?? false,
         openrouterKey: true,
       },
     };
@@ -350,6 +370,72 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     layer.current = { ...restore, updatedAt: now() };
     return [200, view()];
   };
+  // "Suggest for everyone": a pretend pull request on the org-env repo (docs/API.md section 7a).
+  const suggest: Handler = async (ctx) => {
+    const owner = userFor(ctx.user, ctx.params[0] ?? "");
+    const request = (await ctx.body()) as SuggestRequest;
+    const layer = layerOf(owner.id).current;
+    let name = "";
+    let title = "";
+    if (request.kind === "skill") {
+      if (!layer.skills.some((skill) => skill.name === request.name)) {
+        throw new HttpError(404, "not_found", "no such skill");
+      }
+      name = request.name;
+      title = `Suggest skill "${name}" for everyone`;
+    } else if (request.kind === "note") {
+      const note = layer.notes.find((n) => n.id === request.noteId);
+      if (!note) throw new HttpError(404, "not_found", "no such note");
+      name = note.id;
+      title = `Suggest a note for everyone: ${note.text.slice(0, 60)}`;
+    } else {
+      if (!layer.instructions.trim()) {
+        throw new HttpError(409, "conflict", "the personal instructions are empty");
+      }
+      title = `Suggest ${owner.name}'s instructions for everyone`;
+    }
+    const open = suggestions.find(
+      (s) =>
+        s.userId === owner.id && s.kind === request.kind && s.name === name && s.state === "open",
+    );
+    if (open) throw new HttpError(409, "conflict", `already suggested and still open: ${open.url}`);
+    const number = suggestions.length + 1;
+    const suggestion: SuggestionView = {
+      id: `sg${number}`,
+      userId: owner.id,
+      userEmail: owner.email,
+      byUserId: ctx.user.id,
+      kind: request.kind,
+      name,
+      title,
+      number,
+      url: `https://github.example/org/org-env/pull/${number}`,
+      state: "open",
+      createdAt: now(),
+      updatedAt: now(),
+      checkedAt: now(),
+    };
+    suggestions.unshift(suggestion);
+    return [201, suggestion];
+  };
+  const listSuggestions: Handler = ({ user, query }) => {
+    if (query.get("all") === "1") {
+      requireAdmin(user);
+      return [200, { suggestions }];
+    }
+    const owner = userFor(user, query.get("userId") ?? user.id);
+    return [200, { suggestions: suggestions.filter((s) => s.userId === owner.id) }];
+  };
+  const archiveLink: Handler = ({ user, params, query }) => {
+    const task = ownTask(user, params[0] ?? "");
+    if (task.state !== "archived") {
+      throw new HttpError(409, "conflict", "this task has no archived state");
+    }
+    if (query.get("link") !== "1")
+      throw new HttpError(400, "bad_request", "the mock answers ?link=1");
+    const expiresAt = new Date(Date.now() + 600_000).toISOString();
+    return [200, { url: `https://bucket.example/archives/${task.id}/state.tar.gz`, expiresAt }];
+  };
   const setLimits: Handler = async (ctx) => {
     requireAdmin(ctx.user);
     const target = userFor(ctx.user, ctx.params[0] ?? "");
@@ -382,8 +468,14 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     [
       "GET",
       /^\/api\/tasks$/,
-      ({ user }) => [200, { tasks: tasks.filter((t) => t.userId === user.id) }],
+      ({ user, query }) => {
+        const owner = userFor(user, query.get("userId") ?? user.id);
+        return [200, { tasks: tasks.filter((t) => t.userId === owner.id) }];
+      },
     ],
+    ["GET", new RegExp(`^/api/tasks/${ID}/archive$`), archiveLink],
+    ["GET", /^\/api\/suggestions$/, listSuggestions],
+    ["POST", new RegExp(`^/api/users/${ID}/layer/suggest$`), suggest],
     ["POST", /^\/api\/tasks$/, createTask],
     [
       "GET",
@@ -484,7 +576,12 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     for (const [routeMethod, pattern, handler] of routes) {
       const match = routeMethod === method ? pattern.exec(url.pathname) : null;
       if (!match) continue;
-      const [status, body] = await handler({ user, params: match.slice(1), body: readJson(req) });
+      const [status, body] = await handler({
+        user,
+        params: match.slice(1),
+        query: url.searchParams,
+        body: readJson(req),
+      });
       return send(res, status, body);
     }
     throw new HttpError(404, "not_found", "not found");
@@ -669,7 +766,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   return {
     url: `http://127.0.0.1:${port}`,
     port,
-    state: { tasks, layers, requests, notices },
+    state: { tasks, layers, requests, notices, suggestions },
     close: () =>
       new Promise<void>((resolve) => {
         for (const client of wss.clients) client.terminate();

@@ -1,5 +1,13 @@
 // Pure decisions for the Jarvis 3 screens (unit-tested in plan.test.ts). No React Native here.
-import type { ApiError, ErrorCode, PersonalLayerView, TaskState, TaskView } from "./api-types";
+import type {
+  ApiError,
+  ErrorCode,
+  PersonalLayerView,
+  SuggestionView,
+  TaskState,
+  TaskView,
+  UserDetail,
+} from "./api-types";
 
 // ---- instance URL -----------------------------------------------------------------------
 
@@ -327,6 +335,69 @@ export function parseLimitInput(
 export function formatLimit(value: number | null, unit: "usd" | "hours"): string {
   if (value === null) return "No limit";
   return unit === "usd" ? `USD ${value.toFixed(2)}` : `${value} h`;
+}
+
+/** The admin's one-line summary of a user's model spend and machine time this month. */
+export function describeUsage(detail: Pick<UserDetail, "limits" | "usage">): string {
+  const { limits, usage } = detail;
+  const own = " (set for this user)";
+  const model = `Model spend ${formatLimit(limits.openrouterMonthlyUsd, "usd")}${limits.openrouterOverride ? own : ""}`;
+  const hours = `machine time ${usage.machineHours.toFixed(1)} h of ${formatLimit(limits.machineHoursPerMonth, "hours")}${limits.machineHoursOverride ? own : ""}`;
+  const cap = usage.machineHoursCapReached ? " Machine-hour cap reached: tasks paused." : "";
+  return `${model}; ${hours} in ${usage.month}.${cap}`;
+}
+
+// ---- "Suggest for everyone" ---------------------------------------------------------------
+
+export type SuggestTarget =
+  | { kind: "skill"; name: string }
+  | { kind: "instructions" }
+  | { kind: "note"; noteId: string };
+
+/** The name a suggestion is recorded under (SuggestionView.name) for a target. */
+function targetName(target: SuggestTarget): string {
+  if (target.kind === "skill") return target.name;
+  if (target.kind === "note") return target.noteId;
+  return "";
+}
+
+/**
+ * The open suggestion for a target, if any: the button then shows "Suggested" with the link
+ * instead of opening a second pull request (the server would refuse it).
+ */
+export function openSuggestionFor(
+  suggestions: readonly SuggestionView[],
+  target: SuggestTarget,
+): SuggestionView | null {
+  const name = targetName(target);
+  return (
+    suggestions.find((s) => s.state === "open" && s.kind === target.kind && s.name === name) ?? null
+  );
+}
+
+export function presentSuggestion(s: Pick<SuggestionView, "state">): {
+  label: string;
+  tone: Tone;
+} {
+  switch (s.state) {
+    case "open":
+      return { label: "Waiting for an admin", tone: "busy" };
+    case "merged":
+      return { label: "Accepted", tone: "ok" };
+    case "closed":
+      return { label: "Closed", tone: "muted" };
+  }
+}
+
+export function suggestionTargetLabel(s: Pick<SuggestionView, "kind" | "name">): string {
+  if (s.kind === "skill") return `Skill "${s.name}"`;
+  if (s.kind === "instructions") return "Instructions";
+  return "A note";
+}
+
+/** An archived task's state can be downloaded (the server answers 409 when none was kept). */
+export function canDownloadArchive(task: Pick<TaskView, "state">): boolean {
+  return task.state === "archived";
 }
 
 // ---- the chat screen's phase --------------------------------------------------------------

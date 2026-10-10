@@ -1,6 +1,7 @@
 // My instructions & skills: the user's personal layer (docs/API.md section 7). Read, edit and
 // delete; Reset to company default (archived, with Undo). Changes apply from the next task.
-import { useCallback, useEffect, useState } from "react";
+// When the instance has it set up, each item can be suggested for everyone (suggestions.tsx).
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { SettingsCard, SettingsInput, SettingsRow, SettingsSection } from "@/components/settings";
@@ -8,10 +9,16 @@ import { SettingsTextAreaCard } from "@/components/settings-textarea";
 import { Button } from "@/components/ui/button";
 import type { PersonalLayerView, PersonalNote, PersonalSkill } from "../api-types";
 import { layerStore } from "../client";
-import { useLayer } from "../hooks";
+import { useAccount, useLayer } from "../hooks";
 import { canUndoLayer, INSTRUCTIONS_MAX, isLayerEmpty, validateSkill } from "../plan";
 import type { LayerState } from "../stores";
 import { Banner, CenteredDialog, EmptyState, Jarvis3Frame } from "../ui";
+import {
+  SuggestButton,
+  SuggestionsCard,
+  type SuggestionsState,
+  useSuggestions,
+} from "./suggestions";
 
 type Pending = { kind: "reset" } | { kind: "skill"; name: string } | { kind: "note"; id: string };
 
@@ -39,6 +46,10 @@ function dialogText(pending: Pending | null): { title: string; message: string; 
 
 export function LayerScreen() {
   const layerState = useLayer();
+  const account = useAccount();
+  const suggestionsOn = account.me?.features?.suggestions === true;
+  const suggestions = useSuggestions(suggestionsOn);
+  const suggestState = suggestionsOn ? suggestions : null;
   const [pending, setPending] = useState<Pending | null>(null);
   // Bumped after a Reset so the editors start again from the server's (empty) layer.
   const [generation, setGeneration] = useState(0);
@@ -85,13 +96,25 @@ export function LayerScreen() {
         instructions. Changes apply from your next task; running tasks keep what they started with.
       </Text>
       <LayerNotices state={layerState} layer={layer} />
+      {suggestState ? <SuggestionBanners state={suggestState} /> : null}
       <InstructionsSection
         key={`i-${generation}-${layer.updatedAt ?? ""}`}
         layer={layer}
         busy={layerState.busy}
+        suggestions={suggestState}
       />
-      <SkillsSection key={`s-${generation}`} layer={layer} onDelete={setPending} />
-      <NotesSection layer={layer} onDelete={setPending} />
+      <SkillsSection
+        key={`s-${generation}`}
+        layer={layer}
+        onDelete={setPending}
+        suggestions={suggestState}
+      />
+      <NotesSection layer={layer} onDelete={setPending} suggestions={suggestState} />
+      {suggestState?.list && suggestState.list.length > 0 ? (
+        <SettingsSection title="Suggested for everyone">
+          <SuggestionsCard list={suggestState.list} testID="jarvis3-my-suggestions" />
+        </SettingsSection>
+      ) : null}
       <ResetSection state={layerState} layer={layer} onReset={setPending} />
       <CenteredDialog
         visible={pending !== null}
@@ -136,7 +159,30 @@ function LayerNotices({ state, layer }: { state: LayerState; layer: PersonalLaye
   );
 }
 
-function InstructionsSection({ layer, busy }: { layer: PersonalLayerView; busy: boolean }) {
+function SuggestionBanners({ state }: { state: SuggestionsState }) {
+  return (
+    <>
+      {state.opened ? (
+        <Banner tone="ok" testID="jarvis3-suggest-banner">
+          {`Suggested. An admin reviews it as pull request #${state.opened.number}.`}
+        </Banner>
+      ) : null}
+      {state.error ? <Banner tone="error">{state.error}</Banner> : null}
+    </>
+  );
+}
+
+const INSTRUCTIONS_TARGET = { kind: "instructions" } as const;
+
+function InstructionsSection({
+  layer,
+  busy,
+  suggestions,
+}: {
+  layer: PersonalLayerView;
+  busy: boolean;
+  suggestions: SuggestionsState | null;
+}) {
   const [draft, setDraft] = useState<string | null>(null);
   const text = draft ?? layer.instructions;
   const changed = draft !== null && draft !== layer.instructions;
@@ -158,6 +204,13 @@ function InstructionsSection({ layer, busy }: { layer: PersonalLayerView; busy: 
       />
       <View style={styles.rowButtons}>
         {tooLong ? <Text style={styles.error}>Limited to 64,000 characters.</Text> : null}
+        {suggestions && !changed && layer.instructions.trim() !== "" ? (
+          <SuggestButton
+            state={suggestions}
+            target={INSTRUCTIONS_TARGET}
+            label="Your instructions"
+          />
+        ) : null}
         <Button
           variant="default"
           size="sm"
@@ -176,9 +229,11 @@ function InstructionsSection({ layer, busy }: { layer: PersonalLayerView; busy: 
 function SkillsSection({
   layer,
   onDelete,
+  suggestions,
 }: {
   layer: PersonalLayerView;
   onDelete: (pending: Pending) => void;
+  suggestions: SuggestionsState | null;
 }) {
   const [editing, setEditing] = useState<PersonalSkill | "new" | null>(null);
   const addNew = useCallback(() => setEditing("new"), []);
@@ -193,7 +248,13 @@ function SkillsSection({
           />
         ) : null}
         {layer.skills.map((skill) => (
-          <SkillRow key={skill.name} skill={skill} onEdit={setEditing} onDelete={onDelete} />
+          <SkillRow
+            key={skill.name}
+            skill={skill}
+            onEdit={setEditing}
+            onDelete={onDelete}
+            suggestions={suggestions}
+          />
         ))}
       </SettingsCard>
       {editing ? (
@@ -217,12 +278,15 @@ function SkillRow({
   skill,
   onEdit,
   onDelete,
+  suggestions,
 }: {
   skill: PersonalSkill;
   onEdit: (skill: PersonalSkill) => void;
   onDelete: (pending: Pending) => void;
+  suggestions: SuggestionsState | null;
 }) {
   const count = Object.keys(skill.files).length;
+  const target = useMemo(() => ({ kind: "skill" as const, name: skill.name }), [skill.name]);
   const edit = useCallback(() => onEdit(skill), [onEdit, skill]);
   const remove = useCallback(
     () => onDelete({ kind: "skill", name: skill.name }),
@@ -235,6 +299,9 @@ function SkillRow({
       testID={`jarvis3-skill-${skill.name}`}
     >
       <View style={styles.inlineButtons}>
+        {suggestions ? (
+          <SuggestButton state={suggestions} target={target} label={`The skill "${skill.name}"`} />
+        ) : null}
         <Button variant="ghost" size="sm" onPress={edit}>
           Edit
         </Button>
@@ -313,9 +380,11 @@ function SkillEditor({ skill, onDone }: { skill: PersonalSkill | null; onDone: (
 function NotesSection({
   layer,
   onDelete,
+  suggestions,
 }: {
   layer: PersonalLayerView;
   onDelete: (pending: Pending) => void;
+  suggestions: SuggestionsState | null;
 }) {
   const [text, setText] = useState("");
   const [inputKey, setInputKey] = useState(0);
@@ -335,7 +404,7 @@ function NotesSection({
           <SettingsRow label="Nothing yet" hint='Tell an agent "remember …" and it lands here.' />
         ) : null}
         {layer.notes.map((note) => (
-          <NoteRow key={note.id} note={note} onDelete={onDelete} />
+          <NoteRow key={note.id} note={note} onDelete={onDelete} suggestions={suggestions} />
         ))}
       </SettingsCard>
       <SettingsCard>
@@ -362,17 +431,31 @@ function NotesSection({
   );
 }
 
-function NoteRow({ note, onDelete }: { note: PersonalNote; onDelete: (pending: Pending) => void }) {
+function NoteRow({
+  note,
+  onDelete,
+  suggestions,
+}: {
+  note: PersonalNote;
+  onDelete: (pending: Pending) => void;
+  suggestions: SuggestionsState | null;
+}) {
   const remove = useCallback(() => onDelete({ kind: "note", id: note.id }), [onDelete, note.id]);
+  const target = useMemo(() => ({ kind: "note" as const, noteId: note.id }), [note.id]);
   return (
     <SettingsRow
       label={note.text}
       hint={note.source === "session" ? "Saved by an agent" : "Added by you"}
       testID={`jarvis3-note-${note.id}`}
     >
-      <Button variant="ghost" size="sm" onPress={remove}>
-        Delete
-      </Button>
+      <View style={styles.inlineButtons}>
+        {suggestions ? (
+          <SuggestButton state={suggestions} target={target} label="This note" />
+        ) : null}
+        <Button variant="ghost" size="sm" onPress={remove}>
+          Delete
+        </Button>
+      </View>
     </SettingsRow>
   );
 }

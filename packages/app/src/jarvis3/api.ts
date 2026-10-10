@@ -3,6 +3,7 @@
 // with a fake fetch (api.test.ts) and used with the real one in client.ts.
 import type {
   AddNoteRequest,
+  ArchiveLink,
   CreateTaskRequest,
   MarkNoticesReadRequest,
   MarkNoticesReadResult,
@@ -15,6 +16,9 @@ import type {
   ResetResult,
   SetInstructionsRequest,
   SetLimitsRequest,
+  SuggestionList,
+  SuggestionView,
+  SuggestRequest,
   TaskList,
   TaskView,
   UserDetail,
@@ -113,7 +117,22 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
     resetLayer: () => call<ResetResult>("POST", `${me}/layer/reset`),
     undoLayer: () => call<PersonalLayerView>("POST", `${me}/layer/undo`),
 
+    /** "Suggest for everyone": a pull request on the org-env repo from part of the caller's layer. */
+    suggest: (request: SuggestRequest) =>
+      call<SuggestionView>("POST", `${me}/layer/suggest`, request),
+    /** The caller's suggestions, or with `all` (admins) everyone's. */
+    listSuggestions: (scope: { all?: boolean } = {}) =>
+      call<SuggestionList>("GET", scope.all ? "/api/suggestions?all=1" : "/api/suggestions"),
+
     listUsers: () => call<UserList>("GET", "/api/users"),
+    /** Admin: a user's tasks, archived ones included (an offboarded person's sessions). */
+    listUserTasks: (userId: string) => call<TaskList>("GET", `/api/tasks?userId=${id(userId)}`),
+    /** Admin: a user's personal layer (kept after offboarding). */
+    getUserLayer: (userId: string) =>
+      call<PersonalLayerView>("GET", `/api/users/${id(userId)}/layer`),
+    /** A short-lived download link for an archived task's state. */
+    archiveLink: (taskId: string) =>
+      call<ArchiveLink>("GET", `/api/tasks/${id(taskId)}/archive?link=1`),
     setLimits: (userId: string, limits: SetLimitsRequest) =>
       call<UserDetail>("PATCH", `/api/users/${id(userId)}/limits`, limits),
   };

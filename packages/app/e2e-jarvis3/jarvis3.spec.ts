@@ -1,15 +1,16 @@
 // The jarvis3 variant in a browser against a mock Jarvis 3 instance (mock-instance.ts) whose
 // daemon proxy reaches a real Paseo daemon (daemon.ts). Screens: task list, New task, chat (the
 // task's reported agent), Start for a paused task, My instructions & skills with Reset + Undo,
-// notices with the unread count, admin users, and another user's task (not found, and its
-// daemon socket and HTTP relay refused). The HTTP relay reaches the daemon. Saves phone (390) and desktop (1440)
+// notices with the unread count, "Suggest for everyone", admin users (cap state, an offboarded
+// person's tasks, archive and layer, everyone's suggestions), and another user's task (not
+// found, and its daemon socket and HTTP relay refused). The HTTP relay reaches the daemon. Saves phone (390) and desktop (1440)
 // screenshots in light and dark to JARVIS3_SCREENSHOT_DIR (default e2e-artifacts/jarvis3).
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import type { NoticeView, TaskView } from "../src/jarvis3/api-types";
 import { startTaskDaemon, type TaskDaemon } from "./daemon";
-import { startMockInstance, type MockInstance } from "./mock-instance";
+import { DEFAULT_USERS, startMockInstance, type MockInstance } from "./mock-instance";
 
 const DIST = path.resolve(__dirname, "../dist-jarvis3");
 const SHOTS = path.resolve(
@@ -19,6 +20,7 @@ const SHOTS = path.resolve(
 const RUNNING = "a1a1a1a1a1a1a1a1";
 const PAUSED = "b2b2b2b2b2b2b2b2";
 const BOBS = "c3c3c3c3c3c3c3c3";
+const CAROLS = "d4d4d4d4d4d4d4d4";
 const FIRST_PROMPT = "Draft the Q3 supplier summary";
 
 function task(patch: Partial<TaskView> & Pick<TaskView, "id" | "userId" | "title">): TaskView {
@@ -71,8 +73,38 @@ test.beforeAll(async () => {
         connected: false,
       }),
       task({ id: BOBS, userId: "u-bob", title: "Bob's private task", agentId: daemon.agentId }),
+      task({
+        id: CAROLS,
+        userId: "u-carol",
+        title: "Carol's supplier list",
+        state: "archived",
+        connected: false,
+      }),
     ],
     daemons: { [RUNNING]: daemon, [BOBS]: daemon },
+    // Carol was offboarded: her task is archived, her layer kept. Bob is at his machine-hour cap.
+    users: [
+      ...DEFAULT_USERS,
+      { id: "u-carol", email: "carol@example.org", name: "Carol", role: "staff", isAdmin: false },
+    ],
+    userStatus: { "u-carol": "suspended" },
+    capReached: ["u-bob"],
+    layers: {
+      "u-carol": {
+        instructions: "Quote prices in EUR.",
+        skills: [],
+        notes: [
+          {
+            id: "nc1",
+            text: "Carol's customers are in Austria.",
+            createdAt: "2026-10-01T00:00:00.000Z",
+            source: "user",
+            taskId: null,
+          },
+        ],
+        updatedAt: "2026-10-01T00:00:00.000Z",
+      },
+    },
     notices: {
       "u-alice": [
         notice("n2", "Your monthly machine hours are used up; 1 task was paused.", PAUSED),
@@ -233,6 +265,23 @@ test("My instructions & skills: edit, Reset to company default, Undo", async ({ 
   await expect(page.getByTestId("jarvis3-instructions")).toHaveValue("Answer in German.");
 });
 
+test("Suggest for everyone: a skill becomes a pull request with its link and state", async ({
+  page,
+}) => {
+  await page.goto(`${instance.url}/me/layer`);
+  const skill = page.getByTestId("jarvis3-skill-invoices");
+  await expect(skill).toBeVisible();
+  await skill.getByText("Suggest for everyone").click();
+  await expect(page.getByTestId("jarvis3-suggest-dialog")).toBeVisible();
+  await page.getByTestId("jarvis3-suggest-dialog-confirm").click();
+  await expect(page.getByTestId("jarvis3-suggest-banner")).toContainText("pull request #1");
+  await expect(skill.getByText("Suggested")).toBeVisible();
+  await expect(page.getByTestId("jarvis3-my-suggestions")).toContainText('Skill "invoices" · #1');
+  await expect(page.getByTestId("jarvis3-my-suggestions")).toContainText("Waiting for an admin");
+  expect(instance.state.suggestions[0]).toMatchObject({ kind: "skill", name: "invoices" });
+  await shoot(page, "layer-suggested");
+});
+
 test("another user's task is not found, and its daemon socket is refused", async ({ page }) => {
   await page.goto(`${instance.url}/tasks/${BOBS}`);
   await expect(page.getByText("This task doesn't exist, or isn't yours.")).toBeVisible();
@@ -257,7 +306,29 @@ test("an admin sees users and their limits", async ({ page, context }) => {
   await page.getByTestId("jarvis3-nav-admin").filter({ visible: true }).click();
   await expect(page.getByTestId("jarvis3-users")).toContainText("Alice");
   await expect(page.getByTestId("jarvis3-user-u-bob")).toContainText("USD 20.00");
+  await expect(page.getByTestId("jarvis3-user-cap-u-bob")).toContainText("At cap");
+  await expect(page.getByTestId("jarvis3-user-u-carol")).toContainText("suspended");
+  await expect(page.getByTestId("jarvis3-all-suggestions")).toContainText("alice@example.org");
   await shoot(page, "admin-users");
+
+  // an offboarded person's archived task and kept personal layer
+  const openCarol = async () => {
+    const records = page.getByTestId("jarvis3-user-records-u-carol");
+    if (!(await records.isVisible())) {
+      await page.getByTestId("jarvis3-user-u-carol").getByText("Tasks & layer").click();
+    }
+    await expect(records).toContainText("Carol's supplier list");
+  };
+  await openCarol();
+  const records = page.getByTestId("jarvis3-user-records-u-carol");
+  await expect(records).toContainText("Quote prices in EUR.");
+  await expect(records).toContainText("Carol's customers are in Austria.");
+  await shoot(page, "admin-offboarded", openCarol);
+  await openCarol();
+  await page.getByTestId("jarvis3-user-records-u-carol").getByText("Download archive").click();
+  await expect
+    .poll(() => instance.state.requests.includes(`GET /api/tasks/${CAROLS}/archive`))
+    .toBe(true);
 });
 
 test("staff don't see the admin section", async ({ page }) => {
