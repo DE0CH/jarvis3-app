@@ -3,6 +3,7 @@ import type { SuggestionView, TaskView } from "./api-types";
 import {
   canDownloadArchive,
   canUndoLayer,
+  describeToolsUsage,
   describeUsage,
   openSuggestionFor,
   presentSuggestion,
@@ -16,6 +17,7 @@ import {
   orderTasks,
   pairErrorMessage,
   parseLimitInput,
+  toolsCapReached,
   parsePairRedirect,
   noticesLabel,
   planTaskChat,
@@ -308,6 +310,31 @@ describe("admin usage summary", () => {
       "Model spend USD 20.00; machine time 10.0 h of 10 h (set for this user) in 2026-10.",
     );
     expect(describeUsage(detail(true))).toMatch(/Machine-hour cap reached: tasks paused\.$/);
+  });
+});
+
+describe("admin tools summary", () => {
+  it("is absent without Tier 0 tools", () => {
+    expect(describeToolsUsage({})).toBeNull();
+    expect(toolsCapReached({})).toBe(false);
+  });
+  it("shows web spend in fractions of a cent, proxy GB, overrides and the cap", () => {
+    const tools = {
+      month: "2026-10",
+      web: { capUsd: 5, override: false, spentUsd: 0.0147, calls: 3, capReached: false },
+      proxy: { mode: "relay" as const, capGb: 1, override: true, usedGb: 0.25, capReached: false },
+    };
+    expect(describeToolsUsage({ tools })).toBe(
+      "Web tools USD 0.0147 of USD 5.00 (3 calls); proxy 0.25 GB of 1 GB (set for this user).",
+    );
+    const capped = { ...tools, web: { ...tools.web, calls: 1, capReached: true } };
+    expect(describeToolsUsage({ tools: capped })).toMatch(
+      /\(1 call\);.*Cap reached: web tools stopped until next month\.$/,
+    );
+    expect(toolsCapReached({ tools: capped })).toBe(true);
+    expect(describeToolsUsage({ tools: { ...tools, proxy: null } })).toBe(
+      "Web tools USD 0.0147 of USD 5.00 (3 calls).",
+    );
   });
 });
 

@@ -166,6 +166,7 @@ const FRIENDLY: Partial<Record<ErrorCode, string>> = {
   machine_hours_cap:
     "Your machine hours for this month are used up. Ask your admin to raise your limit.",
   instance_budget: "The organisation's monthly budget is used up. Ask your admin.",
+  tools_cap: "This month's web-tools allowance is used up. Ask your admin to raise your limit.",
   too_many_requests: "Too many attempts. Try again in a minute.",
   upstream: "A provider didn't answer. Try again shortly.",
   unavailable: "The task isn't connected yet.",
@@ -332,9 +333,50 @@ export function parseLimitInput(
   return { ok: true, value };
 }
 
-export function formatLimit(value: number | null, unit: "usd" | "hours"): string {
+export function formatLimit(value: number | null, unit: "usd" | "hours" | "gb"): string {
   if (value === null) return "No limit";
+  if (unit === "gb") return `${value} GB`;
   return unit === "usd" ? `USD ${value.toFixed(2)}` : `${value} h`;
+}
+
+/** Small amounts keep their cents' fractions (web tools cost fractions of a cent per call). */
+function formatSpend(usd: number): string {
+  return `USD ${usd < 1 ? usd.toFixed(4) : usd.toFixed(2)}`;
+}
+
+/**
+ * The admin's line on a user's Tier 0 tools this month (web search + fetch spend, proxy traffic),
+ * or null when the instance has none.
+ */
+export function describeToolsUsage(detail: Pick<UserDetail, "tools">): string | null {
+  const tools = detail.tools;
+  if (!tools || (!tools.web && !tools.proxy)) return null;
+  const own = " (set for this user)";
+  const parts: string[] = [];
+  if (tools.web) {
+    const calls = `${tools.web.calls} call${tools.web.calls === 1 ? "" : "s"}`;
+    parts.push(
+      `Web tools ${formatSpend(tools.web.spentUsd)} of ${formatLimit(tools.web.capUsd, "usd")}${tools.web.override ? own : ""} (${calls})`,
+    );
+  }
+  if (tools.proxy) {
+    parts.push(
+      `proxy ${Number(tools.proxy.usedGb.toFixed(3))} GB of ${formatLimit(tools.proxy.capGb, "gb")}${tools.proxy.override ? own : ""}`,
+    );
+  }
+  const capped = [
+    tools.web?.capReached ? "web tools" : null,
+    tools.proxy?.capReached ? "proxy" : null,
+  ].filter(Boolean);
+  const cap = capped.length
+    ? ` Cap reached: ${capped.join(" and ")} stopped until next month.`
+    : "";
+  return `${parts.join("; ")}.${cap}`;
+}
+
+/** Whether a user is at any Tier 0 cap (the "Tools at cap" pill). */
+export function toolsCapReached(detail: Pick<UserDetail, "tools">): boolean {
+  return !!(detail.tools?.web?.capReached || detail.tools?.proxy?.capReached);
 }
 
 /** The admin's one-line summary of a user's model spend and machine time this month. */

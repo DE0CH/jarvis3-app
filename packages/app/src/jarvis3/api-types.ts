@@ -1,4 +1,4 @@
-// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit 7f22606); refresh with
+// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit 0c75946); refresh with
 // scripts/jarvis3-sync-api-types.sh. Type-only: never add runtime code here.
 // The Jarvis 3 instance API contract: request and response shapes of every route.
 // docs/API.md describes the routes and who may call them; this module is the machine-checked
@@ -22,6 +22,7 @@ export type ErrorCode =
   | "busy" // 409: another lifecycle operation is running on this task
   | "machine_hours_cap" // 429: the user's monthly machine-hour cap is reached
   | "instance_budget" // 429: the instance-wide monthly machine budget is reached
+  | "tools_cap" // 429: the user's (or the instance's) monthly cap on web tools or proxy traffic is reached
   | "too_many_requests" // 429: rate limit (device pairing)
   | "capability_missing" // 403 (session routes): the task's role lacks this action; file an access request
   | "upstream" // 502: a provider (Fly, OpenRouter, Cloudflare, Google, S3) failed
@@ -68,6 +69,31 @@ export interface UserDetail {
   user: UserView;
   limits: LimitsView;
   usage: UsageView;
+  /** Tier 0 tools: caps in force and this month's use. Absent when the instance has no Tier 0 tools. */
+  tools?: UserToolsView;
+}
+
+/** A user's Tier 0 tools this month (docs/TOOLS.md). */
+export interface UserToolsView {
+  month: string; // "YYYY-MM" (UTC)
+  /** Web search + page fetching, metered by the server. null when neither is configured. */
+  web: null | {
+    /** Monthly cap in force (role default or override), USD. null = no cap. */
+    capUsd: number | null;
+    override: boolean;
+    spentUsd: number;
+    calls: number;
+    capReached: boolean;
+  };
+  /** Proxy traffic. null when no proxy is configured. */
+  proxy: null | {
+    /** "subuser": the provider caps a sub-account of the user's own; "relay": the server meters it. */
+    mode: "subuser" | "relay";
+    capGb: number | null;
+    override: boolean;
+    usedGb: number;
+    capReached: boolean;
+  };
 }
 
 /** GET /api/me: the caller's own detail, plus what only the caller sees. */
@@ -85,6 +111,8 @@ export interface MeView extends UserDetail {
 export interface InstanceFeatures {
   /** "Suggest for everyone" (POST /api/users/:id/layer/suggest) is set up. */
   suggestions: boolean;
+  /** Which Tier 0 tools this instance has switched on. */
+  tools?: { search: boolean; fetch: boolean; proxy: boolean };
 }
 
 /** GET /api/users (admin) */
@@ -96,6 +124,10 @@ export interface UserList {
 export interface SetLimitsRequest {
   openrouterMonthlyUsd?: number | null;
   machineHoursPerMonth?: number | null;
+  /** Tier 0 web tools (search + fetch), USD per month. */
+  toolsMonthlyUsd?: number | null;
+  /** Tier 0 proxy traffic, GB per month. */
+  proxyMonthlyGb?: number | null;
 }
 
 export interface DeviceView {
@@ -149,15 +181,7 @@ export interface ModelList {
  * archived   final; the archive holds the state
  * failed     the machine could not be created; only Destroy is possible
  */
-export type TaskState =
-  | "starting"
-  | "running"
-  | "idle"
-  | "pausing"
-  | "paused"
-  | "destroying"
-  | "archived"
-  | "failed";
+export type TaskState = "starting" | "running" | "idle" | "pausing" | "paused" | "destroying" | "archived" | "failed";
 
 export interface TaskView {
   id: string;
@@ -351,6 +375,70 @@ export interface GuardRule {
 
 // ---- session-facing ---------------------------------------------------------------------------
 
+/** GET /api/session/tools: what this session's Tier 0 tools are and how much is left this month. */
+export interface SessionToolsView {
+  search: boolean;
+  fetch: boolean;
+  /** null: no proxy. "subuser": the machine holds its owner's capped sub-account (JARVIS_PROXY); "relay": through the server. */
+  proxy: null | "subuser" | "relay";
+  web: { capUsd: number | null; spentUsd: number } | null;
+  proxyUsage: { capGb: number | null; usedGb: number } | null;
+}
+
+/** POST /api/session/tools/search */
+export interface WebSearchRequest {
+  query: string;
+  /** 1..20, default 10. */
+  numResults?: number;
+  /** 0..20000: extracted page text per result, where the provider gives it. Default 0 (snippets only). */
+  textChars?: number;
+  since?: string; // YYYY-MM-DD
+  includeDomains?: string[];
+  country?: string; // two letters
+}
+
+export interface WebSearchHit {
+  title: string;
+  url: string;
+  snippet: string;
+  publishedDate?: string;
+  text?: string;
+}
+
+export interface WebSearchResponse {
+  provider: string;
+  results: WebSearchHit[];
+  costUsd: number;
+  /** This month's search + fetch spend after this call, and the cap. */
+  spentUsd: number;
+  capUsd: number | null;
+}
+
+/** POST /api/session/tools/fetch */
+export interface WebFetchRequest {
+  url: string;
+  /** Run the page's JavaScript first. Default false. */
+  render?: boolean;
+  /** The provider's residential/premium pool, for bot-walled sites (dearest). Default false. */
+  premium?: boolean;
+  country?: string;
+  /** "html" (default, the raw page) or "text". */
+  format?: "html" | "text";
+}
+
+export interface WebFetchResponse {
+  provider: string;
+  status: number;
+  contentType: string;
+  finalUrl: string | null;
+  body: string;
+  /** The body was cut to the server's limit. */
+  truncated: boolean;
+  costUsd: number;
+  spentUsd: number;
+  capUsd: number | null;
+}
+
 /** POST /api/session/status */
 export interface SessionStatusRequest {
   activity: "busy" | "idle";
@@ -364,15 +452,7 @@ export interface SessionStatusRequest {
 
 export interface NoticeView {
   id: string;
-  kind:
-    | "machine_hours_cap"
-    | "instance_budget"
-    | "task_failed"
-    | "offboarded"
-    | "suggestion"
-    | "approval_needed"
-    | "approval_decided"
-    | "passkey_added";
+  kind: "machine_hours_cap" | "tools_cap" | "instance_budget" | "task_failed" | "offboarded" | "suggestion" | "approval_needed" | "approval_decided" | "passkey_added";
   text: string;
   taskId: string | null;
   createdAt: IsoTime;
@@ -404,6 +484,18 @@ export interface BudgetView {
   capped: boolean;
   ratePerHour: number;
   lastSampleAt: IsoTime | null;
+}
+
+/** GET /api/admin/tools (admin): the instance's Tier 0 providers and this month's totals. */
+export interface ToolsAdminView {
+  month: string;
+  search: null | { provider: string };
+  fetch: null | { provider: string };
+  proxy: null | { provider: string; mode: "subuser" | "relay" };
+  /** Search + fetch, every user together. */
+  web: { spentUsd: number; calls: number; capUsd: number | null; capReached: boolean };
+  /** Relayed proxy traffic (relay mode) or the sum of the sub-accounts' last-read use (subuser mode). */
+  proxyUsedGb: number;
 }
 
 /** POST /api/admin/directory/sync (admin) */
@@ -457,14 +549,7 @@ export type ApprovalLevel = "auto" | "self" | "admin" | "owner";
  * denied    refused (`decision.note` says why)
  * cancelled the task stopped (paused, destroyed or offboarded) before a decision
  */
-export type ApprovalState =
-  | "pending"
-  | "approved"
-  | "executing"
-  | "done"
-  | "failed"
-  | "denied"
-  | "cancelled";
+export type ApprovalState = "pending" | "approved" | "executing" | "done" | "failed" | "denied" | "cancelled";
 
 /** Exactly what will happen, for the person deciding. */
 export interface ApprovalPreview {
@@ -565,24 +650,11 @@ export interface Health {
 
 /** Frames the server sends to the session's channel agent. */
 export type ServerToSessionFrame =
-  | {
-      type: "ws-open";
-      id: string;
-      path: string;
-      protocols: string[];
-      headers: Record<string, string>;
-    }
+  | { type: "ws-open"; id: string; path: string; protocols: string[]; headers: Record<string, string> }
   | { type: "ws-msg"; id: string; text?: string; data_b64?: string }
   | { type: "ws-close"; id: string; code?: number; reason?: string }
   /** An HTTP request to the local daemon (the HTTP relay). Body ≤ 1 MiB, base64. */
-  | {
-      type: "http-req";
-      id: string;
-      method: string;
-      path: string;
-      headers: Record<string, string>;
-      body_b64?: string;
-    }
+  | { type: "http-req"; id: string; method: string; path: string; headers: Record<string, string>; body_b64?: string }
   /** The app went away: stop sending the response of request `id`. */
   | { type: "http-cancel"; id: string }
   | { type: "pong" };

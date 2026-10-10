@@ -89,6 +89,8 @@ test.beforeAll(async () => {
     ],
     userStatus: { "u-carol": "suspended" },
     capReached: ["u-bob"],
+    tools: true,
+    toolsCapReached: ["u-bob"],
     layers: {
       "u-carol": {
         instructions: "Quote prices in EUR.",
@@ -309,7 +311,22 @@ test("an admin sees users and their limits", async ({ page, context }) => {
   await expect(page.getByTestId("jarvis3-user-cap-u-bob")).toContainText("At cap");
   await expect(page.getByTestId("jarvis3-user-u-carol")).toContainText("suspended");
   await expect(page.getByTestId("jarvis3-all-suggestions")).toContainText("alice@example.org");
+  // Tier 0 tools: web spend and proxy traffic, and Bob at his web-tools cap
+  await expect(page.getByTestId("jarvis3-user-u-alice")).toContainText(
+    "Web tools USD 0.0147 of USD 5.00 (3 calls); proxy 0.25 GB of 1 GB",
+  );
+  await expect(page.getByTestId("jarvis3-user-tools-cap-u-bob")).toContainText("Tools at cap");
   await shoot(page, "admin-users");
+
+  // raise Bob's web-tools cap: the pill goes, the row says it is set for him
+  await page.getByTestId("jarvis3-user-u-bob").getByText("Limits").click();
+  await page.getByLabel("Web search and fetching per month (USD)").fill("20");
+  await page.getByText("Save").click();
+  await expect(page.getByTestId("jarvis3-user-u-bob")).toContainText(
+    "Web tools USD 5.00 of USD 20.00 (set for this user)",
+  );
+  await expect(page.getByTestId("jarvis3-user-tools-cap-u-bob")).toHaveCount(0);
+  expect(instance.state.requests).toContain("PATCH /api/users/u-bob/limits");
 
   // an offboarded person's archived task and kept personal layer
   const openCarol = async () => {

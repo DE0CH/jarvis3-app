@@ -82,6 +82,10 @@ export interface MockInstanceOptions {
   userStatus?: Record<string, UserStatus>;
   /** Users whose machine-hour cap is reached this month. */
   capReached?: string[];
+  /** The instance has Tier 0 tools (web search/fetch and a relayed proxy): UserDetail.tools. */
+  tools?: boolean;
+  /** Users whose web-tools cap is reached this month. */
+  toolsCapReached?: string[];
   /** userId -> a personal layer to start with (an offboarded person's kept layer). */
   layers?: Record<string, LayerContent>;
   /** Approvals, as stored: `canDecide` and `decideWith` are worked out per caller. */
@@ -172,7 +176,10 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   const tasks: TaskView[] = (options.tasks ?? []).map((task) => Object.assign({}, task));
   const daemons: Record<string, MockDaemonTarget> = { ...options.daemons };
   const layers = new Map<string, StoredLayer>();
-  const limits = new Map<string, { usd: number | null; hours: number | null }>();
+  const limits = new Map<
+    string,
+    { usd: number | null; hours: number | null; tools?: number | null; proxy?: number | null }
+  >();
   const requests: string[] = [];
   const notices = new Map<string, NoticeView[]>(
     Object.entries(options.notices ?? {}).map(([userId, list]) => [
@@ -231,6 +238,32 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
         machineHours: options.capReached?.includes(user.id) ? 10 : 1.5,
         machineHoursCapReached: options.capReached?.includes(user.id) ?? false,
         openrouterKey: true,
+      },
+      ...(options.tools ? { tools: toolsOf(user, override) } : {}),
+    };
+  };
+  const toolsOf = (
+    user: MockUser,
+    override: { tools?: number | null; proxy?: number | null },
+  ): NonNullable<UserDetail["tools"]> => {
+    const capUsd = override.tools ?? 5;
+    const atCap = options.toolsCapReached?.includes(user.id) ?? false;
+    const spentUsd = atCap ? 5 : 0.0147;
+    return {
+      month: "2026-10",
+      web: {
+        capUsd,
+        override: override.tools != null,
+        spentUsd,
+        calls: atCap ? 712 : 3,
+        capReached: spentUsd >= capUsd,
+      },
+      proxy: {
+        mode: "relay",
+        capGb: override.proxy ?? 1,
+        override: override.proxy != null,
+        usedGb: 0.25,
+        capReached: false,
       },
     };
   };
@@ -550,6 +583,8 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     limits.set(target.id, {
       usd: setOverride(previous.usd, request.openrouterMonthlyUsd),
       hours: setOverride(previous.hours, request.machineHoursPerMonth),
+      tools: setOverride(previous.tools ?? null, request.toolsMonthlyUsd),
+      proxy: setOverride(previous.proxy ?? null, request.proxyMonthlyGb),
     });
     return [200, detailOf(target)];
   };

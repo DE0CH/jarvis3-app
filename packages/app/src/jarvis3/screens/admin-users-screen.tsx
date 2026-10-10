@@ -1,5 +1,5 @@
-// Admin: every user's monthly limits (model spend and machine hours) and this month's use, with
-// the machine-hour cap state; each user's tasks (archive downloads) and personal layer, kept after
+// Admin: every user's monthly limits (model spend, machine hours, and the Tier 0 web tools and
+// proxy traffic when the instance has them) and this month's use, with the cap state; each user's tasks (archive downloads) and personal layer, kept after
 // offboarding; and everyone's "Suggest for everyone" pull requests.
 // Shown only to admins; the server refuses the routes to anyone else (404).
 import { useCallback, useEffect, useState } from "react";
@@ -8,10 +8,17 @@ import { StyleSheet } from "react-native-unistyles";
 import { SettingsCard, SettingsInput, SettingsRow, SettingsSection } from "@/components/settings";
 import { Button } from "@/components/ui/button";
 import { openExternalUrl } from "@/utils/open-external-url";
-import type { PersonalLayerView, TaskView, UserDetail } from "../api-types";
+import type { PersonalLayerView, SetLimitsRequest, TaskView, UserDetail } from "../api-types";
 import { jarvis3Api } from "../client";
 import { useAccount } from "../hooks";
-import { canDownloadArchive, describeUsage, parseLimitInput, presentTask } from "../plan";
+import {
+  canDownloadArchive,
+  describeToolsUsage,
+  describeUsage,
+  parseLimitInput,
+  presentTask,
+  toolsCapReached,
+} from "../plan";
 import { messageOf } from "../stores";
 import { Banner, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
 import { SuggestionsCard, useSuggestions } from "./suggestions";
@@ -107,15 +114,23 @@ function UserRow({
 }) {
   const edit = useCallback(() => onEdit(detail.user.id), [onEdit, detail.user.id]);
   const toggle = useCallback(() => onDetails(detail.user.id), [onDetails, detail.user.id]);
+  const tools = describeToolsUsage(detail);
   return (
     <SettingsRow
       label={userLabel(detail)}
-      hint={describeUsage(detail)}
+      hint={tools ? `${describeUsage(detail)} ${tools}` : describeUsage(detail)}
       testID={`jarvis3-user-${detail.user.id}`}
     >
       <View style={styles.inlineButtons}>
         {detail.usage.machineHoursCapReached ? (
           <StatusPill tone="error" label="At cap" testID={`jarvis3-user-cap-${detail.user.id}`} />
+        ) : null}
+        {toolsCapReached(detail) ? (
+          <StatusPill
+            tone="error"
+            label="Tools at cap"
+            testID={`jarvis3-user-tools-cap-${detail.user.id}`}
+          />
         ) : null}
         <Button variant="ghost" size="sm" onPress={toggle}>
           Tasks & layer
@@ -248,37 +263,42 @@ function LimitsEditor({
   const [hours, setHours] = useState(
     overrideText(limits.machineHoursPerMonth, limits.machineHoursOverride),
   );
+  const web = detail.tools?.web ?? null;
+  const proxy = detail.tools?.proxy ?? null;
+  const [toolsUsd, setToolsUsd] = useState(web ? overrideText(web.capUsd, web.override) : "");
+  const [proxyGb, setProxyGb] = useState(proxy ? overrideText(proxy.capGb, proxy.override) : "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const cancel = useCallback(() => onDone(null), [onDone]);
   const save = useCallback(() => {
-    const a = parseLimitInput(usd);
-    if (!a.ok) {
-      setError(a.error);
-      return;
-    }
-    const b = parseLimitInput(hours);
-    if (!b.ok) {
-      setError(b.error);
-      return;
+    const fields: { text: string; key: keyof SetLimitsRequest; shown: boolean }[] = [
+      { text: usd, key: "openrouterMonthlyUsd", shown: true },
+      { text: hours, key: "machineHoursPerMonth", shown: true },
+      { text: toolsUsd, key: "toolsMonthlyUsd", shown: web !== null },
+      { text: proxyGb, key: "proxyMonthlyGb", shown: proxy !== null },
+    ];
+    const body: SetLimitsRequest = {};
+    for (const field of fields) {
+      if (!field.shown) continue;
+      const parsed = parseLimitInput(field.text);
+      if (!parsed.ok) {
+        setError(parsed.error);
+        return;
+      }
+      body[field.key] = parsed.value;
     }
     const run = async () => {
       setSaving(true);
       try {
-        onDone(
-          await jarvis3Api.setLimits(detail.user.id, {
-            openrouterMonthlyUsd: a.value,
-            machineHoursPerMonth: b.value,
-          }),
-        );
+        onDone(await jarvis3Api.setLimits(detail.user.id, body));
       } catch (e) {
         setError(messageOf(e));
         setSaving(false);
       }
     };
     void run();
-  }, [usd, hours, detail.user.id, onDone]);
+  }, [usd, hours, toolsUsd, proxyGb, web, proxy, detail.user.id, onDone]);
 
   return (
     <View style={styles.editor}>
@@ -296,6 +316,22 @@ function LimitsEditor({
         onChangeText={setHours}
         placeholder="Role default"
       />
+      {web ? (
+        <SettingsInput
+          label="Web search and fetching per month (USD)"
+          initialValue={toolsUsd}
+          onChangeText={setToolsUsd}
+          placeholder="Role default"
+        />
+      ) : null}
+      {proxy ? (
+        <SettingsInput
+          label="Proxy traffic per month (GB)"
+          initialValue={proxyGb}
+          onChangeText={setProxyGb}
+          placeholder="Role default"
+        />
+      ) : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <View style={styles.buttons}>
         <Button variant="ghost" size="sm" onPress={cancel}>
