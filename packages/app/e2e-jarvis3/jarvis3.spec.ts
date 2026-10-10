@@ -110,6 +110,10 @@ async function shoot(page: Page, name: string, prepare?: () => Promise<void>): P
   }
   await page.emulateMedia({ colorScheme: "light" });
   await page.setViewportSize({ width: 1280, height: 800 });
+  // The size and scheme changes can remount the route a moment later (Paseo's layout), which
+  // closes an open dialog or empties a form under the next step. Reload so the test carries on
+  // from a settled page.
+  await page.reload();
 }
 
 test.beforeEach(async ({ context }) => {
@@ -162,11 +166,13 @@ test("New task: first prompt and model, then the task's page", async ({ page }) 
     .getByTestId("jarvis3-new-task-prompt")
     .fill("Summarise the onboarding handbook in one page");
   await shoot(page, "new-task");
-  // Crossing the compact/desktop breakpoint remounts the route (Paseo's layout), so the form
-  // starts empty again after the screenshots.
-  await page
-    .getByTestId("jarvis3-new-task-prompt")
-    .fill("Summarise the onboarding handbook in one page");
+  // shoot() reloads the page, so the form starts empty again after the screenshots.
+  await expect(async () => {
+    await page
+      .getByTestId("jarvis3-new-task-prompt")
+      .fill("Summarise the onboarding handbook in one page");
+    await expect(page.getByTestId("jarvis3-new-task-submit")).toBeEnabled({ timeout: 2_000 });
+  }).toPass();
   await page.getByTestId("jarvis3-new-task-submit").click();
   await expect(page).toHaveURL(/\/tasks\/new0+1$/);
   await expect(page.getByTestId("jarvis3-task-chat")).toContainText(
