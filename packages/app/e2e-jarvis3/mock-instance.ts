@@ -7,6 +7,8 @@
 // Identity stands in for Cloudflare Access: the `CF_Authorization` cookie (or the
 // `Cf-Access-Authenticated-User-Email` header) is the user's email, unsigned, and an iOS build
 // pairs through `/api/devices/pair` (a mock sign-in page, then `CF-Access-Client-Id/Secret`).
+// Approvals follow the server's rules (who may decide, what a decision needs); the passkey pages
+// (`/api/pages/approvals/:id`, `/api/pages/passkeys`) are stand-ins with a "mock passkey" link.
 // Never deploy this.
 //
 // Standalone: node --import tsx e2e-jarvis3/mock-instance.ts --dist dist-jarvis3 --port 8090 \
@@ -16,9 +18,12 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
+import { exampleApprovals } from "./approval-fixtures";
 import type {
   ApiError,
+  ApprovalView,
   CreateTaskRequest,
+  DecideRequest,
   ErrorCode,
   MarkNoticesReadRequest,
   MeView,
@@ -79,6 +84,10 @@ export interface MockInstanceOptions {
   capReached?: string[];
   /** userId -> a personal layer to start with (an offboarded person's kept layer). */
   layers?: Record<string, LayerContent>;
+  /** Approvals, as stored: `canDecide` and `decideWith` are worked out per caller. */
+  approvals?: ApprovalView[];
+  /** The instance's owner (Tier 3 approvals with a passkey). */
+  ownerId?: string;
 }
 
 export interface MockInstance {
@@ -90,6 +99,7 @@ export interface MockInstance {
     requests: string[];
     notices: Map<string, NoticeView[]>;
     suggestions: SuggestionView[];
+    approvals: ApprovalView[];
   };
   close(): Promise<void>;
 }
@@ -171,10 +181,14 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     ]),
   );
   const noticesOf = (userId: string): NoticeView[] => notices.get(userId) ?? [];
+  const approvals: ApprovalView[] = (options.approvals ?? []).map((a) => structuredClone(a));
+  const ownerId = options.ownerId ?? "u-admin";
   const meOf = (user: MockUser): MeView => ({
     ...detailOf(user),
     unreadNotices: noticesOf(user.id).filter((notice) => !notice.read).length,
     features: { suggestions: true },
+    pendingApprovals: approvals.filter((a) => canDecide(user, a)).length,
+    isOwner: user.id === ownerId,
   });
   const suggestions: SuggestionView[] = [];
   for (const [userId, content] of Object.entries(options.layers ?? {})) {
@@ -267,6 +281,98 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       layer: structuredClone(layer.current),
     });
     return version;
+  };
+
+  // ---- approvals ----
+
+  function canDecide(user: MockUser, a: ApprovalView): boolean {
+    if (a.state !== "pending") return false;
+    if (a.approver === "self") return a.user.id === user.id;
+    if (a.approver === "admin") return user.isAdmin;
+    if (a.approver === "owner") return user.id === ownerId;
+    return false;
+  }
+  const approvalView = (user: MockUser, a: ApprovalView): ApprovalView => {
+    const decidable = canDecide(user, a);
+    let decideWith: ApprovalView["decideWith"] = null;
+    if (decidable) decideWith = a.approver === "owner" ? "passkey" : "tap";
+    return { ...structuredClone(a), canDecide: decidable, decideWith };
+  };
+  const visibleApproval = (user: MockUser, id: string): ApprovalView => {
+    const a = approvals.find((x) => x.id === id && (user.isAdmin || x.user.id === user.id));
+    if (!a) throw new HttpError(404, "not_found", "no such approval");
+    return a;
+  };
+  const addNotice = (userId: string, notice: Omit<NoticeView, "id" | "createdAt" | "read">) => {
+    const list = noticesOf(userId);
+    list.unshift({ ...notice, id: `n${Date.now()}`, createdAt: now(), read: false });
+    notices.set(userId, list);
+  };
+  const finish = (
+    user: MockUser,
+    a: ApprovalView,
+    d: {
+      state: "approved" | "denied";
+      note: string | null;
+      grantScope?: "task" | "role";
+      passkey?: boolean;
+    },
+  ) => {
+    Object.assign(a, {
+      state: d.state,
+      updatedAt: now(),
+      decision: {
+        by: { id: user.id, email: user.email, name: user.name },
+        at: now(),
+        note: d.note,
+        grantScope: d.grantScope ?? null,
+        passkey: d.passkey ?? false,
+      },
+    });
+    if (user.id !== a.user.id) {
+      const verb = d.state === "denied" ? "Denied" : "Approved";
+      addNotice(a.user.id, {
+        kind: "approval_decided",
+        text: `${verb} by ${user.name}: ${a.preview.summary}`,
+        taskId: a.taskId,
+      });
+    }
+    if (a.kind === "action" && d.state === "approved") {
+      Object.assign(a, { state: "executing", updatedAt: now() });
+      setTimeout(
+        () => Object.assign(a, { state: "done", result: { ok: true }, updatedAt: now() }),
+        startDelay,
+      );
+    }
+  };
+  const decide: Handler = async ({ user, params, body }) => {
+    const a = visibleApproval(user, params[0] ?? "");
+    if (a.state !== "pending")
+      throw new HttpError(409, "conflict", `this request is already ${a.state}`);
+    if (!canDecide(user, a)) throw new HttpError(403, "forbidden", "you can't decide this");
+    const request = (await body()) as DecideRequest;
+    const note = request.note?.trim() || null;
+    if (request.decision === "deny") finish(user, a, { state: "denied", note });
+    else if (request.decision !== "approve") {
+      throw new HttpError(400, "bad_request", "decision must be approve or deny");
+    } else if (a.approver === "owner") {
+      throw new HttpError(400, "bad_request", "a Tier 3 change is approved with a passkey");
+    } else if (a.kind === "question" && !note) {
+      throw new HttpError(400, "bad_request", "an answer (note) is required");
+    } else if (
+      a.kind === "access" &&
+      request.grantScope !== "task" &&
+      request.grantScope !== "role"
+    ) {
+      throw new HttpError(400, "bad_request", "grantScope must be task or role");
+    } else {
+      finish(user, a, {
+        state: "approved",
+        note,
+        ...(a.kind === "access" ? { grantScope: request.grantScope } : {}),
+      });
+    }
+    return [200, approvalView(user, a)];
   };
 
   // ---- task handlers ----
@@ -479,6 +585,26 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     ["POST", /^\/api\/tasks$/, createTask],
     [
       "GET",
+      /^\/api\/approvals$/,
+      ({ user, query }) => {
+        const taskId = query.get("taskId");
+        const list = approvals
+          .filter((a) => user.isAdmin || a.user.id === user.id)
+          .filter((a) => !taskId || a.taskId === taskId)
+          .filter((a) => query.get("pending") !== "1" || canDecide(user, a))
+          .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .map((a) => approvalView(user, a));
+        return [200, { approvals: list }];
+      },
+    ],
+    [
+      "GET",
+      new RegExp(`^/api/approvals/${ID}$`),
+      ({ user, params }) => [200, approvalView(user, visibleApproval(user, params[0] ?? ""))],
+    ],
+    ["POST", new RegExp(`^/api/approvals/${ID}/decide$`), decide],
+    [
+      "GET",
       new RegExp(`^/api/tasks/${ID}$`),
       ({ user, params }) => [200, ownTask(user, params[0] ?? "")],
     ],
@@ -573,6 +699,9 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     if (url.pathname === "/api/devices/pair") return pairDevice(req, res, url);
     const user = callerOf(req);
     if (!user) throw new HttpError(401, "unauthenticated", "no Access identity");
+    if (url.pathname.startsWith("/api/pages/") || url.pathname === "/__mock/passkey-approve") {
+      return passkeyPage(user, res, url);
+    }
     for (const [routeMethod, pattern, handler] of routes) {
       const match = routeMethod === method ? pattern.exec(url.pathname) : null;
       if (!match) continue;
@@ -653,6 +782,35 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     res.end();
   }
 
+  // ---- passkey pages (stand-ins for the server's WebAuthn pages) ----
+
+  function passkeyPage(user: MockUser, res: ServerResponse, url: URL): void {
+    if (user.id !== ownerId) throw new HttpError(404, "not_found", "not found");
+    const back = url.searchParams.get("return") ?? "";
+    const safe = back.startsWith("/") || back.startsWith(`${appScheme}://`) ? back : "";
+    const escape = (text: string) => text.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+    const approve = /^\/api\/pages\/approvals\/([^/]+)$/.exec(url.pathname);
+    if (url.pathname === "/__mock/passkey-approve") {
+      const a = visibleApproval(user, url.searchParams.get("id") ?? "");
+      if (canDecide(user, a)) finish(user, a, { state: "approved", note: null, passkey: true });
+      res.writeHead(302, { location: safe || "/" });
+      res.end();
+      return;
+    }
+    let content: string;
+    if (approve) {
+      const a = visibleApproval(user, decodeURIComponent(approve[1] ?? ""));
+      const href = `/__mock/passkey-approve?${new URLSearchParams({ id: a.id, return: safe })}`;
+      content = `<h1>Infrastructure change</h1><p>${escape(a.preview.summary)}</p><p><code>${escape(a.changeHash ?? "")}</code></p><p><a id="mock-passkey-approve" href="${escape(href)}" style="font-size:22px">Approve (mock passkey)</a></p>`;
+    } else {
+      content = `<h1>Add a passkey</h1><p><a href="${escape(safe || "/")}" style="font-size:22px">Back</a></p>`;
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(
+      `<!doctype html><meta name="viewport" content="width=device-width"><title>Mock passkey</title><body style="font-family:system-ui;padding:24px">${content}</body>`,
+    );
+  }
+
   function signInPage(res: ServerResponse, url: URL): void {
     const back = url.searchParams.get("return") ?? "/";
     const pick = url.searchParams.get("as");
@@ -691,7 +849,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       });
       return;
     }
-    if (!url.pathname.startsWith("/api/")) {
+    if (!url.pathname.startsWith("/api/") && url.pathname !== "/__mock/passkey-approve") {
       serveStatic(res, url);
       return;
     }
@@ -766,7 +924,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   return {
     url: `http://127.0.0.1:${port}`,
     port,
-    state: { tasks, layers, requests, notices, suggestions },
+    state: { tasks, layers, requests, notices, suggestions, approvals },
     close: () =>
       new Promise<void>((resolve) => {
         for (const client of wss.clients) client.terminate();
@@ -808,9 +966,10 @@ async function main(): Promise<void> {
       },
     ],
     daemons: daemon ? { demo0000000001: daemon } : {},
+    approvals: exampleApprovals("demo0000000001", "Draft the Q3 supplier summary"),
   });
   console.log(
-    `[mock-instance] ${instance.url} (sign in: set the cookie CF_Authorization=alice@example.org)`,
+    `[mock-instance] ${instance.url} (sign in: set the cookie CF_Authorization=alice@example.org, or admin@example.org for the owner)`,
   );
 }
 

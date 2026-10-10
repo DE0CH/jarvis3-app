@@ -8,6 +8,7 @@ import { StyleSheet } from "react-native-unistyles";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ScrollView } from "@/components/ui/scroll-view";
 import { Button } from "@/components/ui/button";
+import { approvalsLabel } from "./approvals";
 import { noticesLabel, type Tone } from "./plan";
 import { useAccount } from "./hooks";
 
@@ -17,12 +18,20 @@ interface NavItem {
   testID: string;
 }
 
-const NAV: NavItem[] = [
-  { href: "/tasks", label: "Tasks", testID: "jarvis3-nav-tasks" },
-  { href: "/me/layer", label: "My instructions & skills", testID: "jarvis3-nav-layer" },
-];
+const TASKS_NAV: NavItem = { href: "/tasks", label: "Tasks", testID: "jarvis3-nav-tasks" };
+const LAYER_NAV: NavItem = {
+  href: "/me/layer",
+  label: "My instructions & skills",
+  testID: "jarvis3-nav-layer",
+};
 const ADMIN_NAV: NavItem = { href: "/admin/users", label: "Users", testID: "jarvis3-nav-admin" };
 const NOTICES_HREF = "/notices";
+const APPROVALS_HREF = "/approvals";
+
+function isCurrent(pathname: string, href: string): boolean {
+  if (pathname === href) return true;
+  return (href === "/tasks" || href === APPROVALS_HREF) && pathname.startsWith(`${href}/`);
+}
 
 export function Jarvis3Frame({
   title,
@@ -45,16 +54,20 @@ export function Jarvis3Frame({
     label: noticesLabel(account.me?.unreadNotices ?? 0),
     testID: "jarvis3-nav-notices",
   };
-  const nav = account.me?.user.isAdmin ? [...NAV, notices, ADMIN_NAV] : [...NAV, notices];
+  const approvals: NavItem = {
+    href: APPROVALS_HREF,
+    label: approvalsLabel(account.me?.pendingApprovals ?? 0),
+    testID: "jarvis3-nav-approvals",
+  };
+  const base = [TASKS_NAV, approvals, LAYER_NAV, notices];
+  const nav = account.me?.user.isAdmin ? [...base, ADMIN_NAV] : base;
   const body = <View style={styles.column}>{children}</View>;
   return (
     <View style={[styles.page, { paddingTop: insets.top }]} testID={testID}>
       <View style={styles.topBar}>
         <View style={styles.nav}>
           {nav.map((item) => {
-            const current =
-              pathname === item.href || (item.href === "/tasks" && pathname.startsWith("/tasks"));
-            return <NavLink key={item.href} item={item} current={current} />;
+            return <NavLink key={item.href} item={item} current={isCurrent(pathname, item.href)} />;
           })}
         </View>
         {account.me ? (

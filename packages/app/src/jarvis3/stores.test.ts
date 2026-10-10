@@ -282,6 +282,8 @@ function me(unreadNotices: number): MeView {
       openrouterKey: true,
     },
     unreadNotices,
+    pendingApprovals: 0,
+    isOwner: false,
   };
 }
 

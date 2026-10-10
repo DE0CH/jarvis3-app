@@ -4,7 +4,10 @@
 import type {
   AddNoteRequest,
   ArchiveLink,
+  ApprovalList,
+  ApprovalView,
   CreateTaskRequest,
+  DecideRequest,
   MarkNoticesReadRequest,
   MarkNoticesReadResult,
   MeView,
@@ -123,6 +126,18 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
     /** The caller's suggestions, or with `all` (admins) everyone's. */
     listSuggestions: (scope: { all?: boolean } = {}) =>
       call<SuggestionList>("GET", scope.all ? "/api/suggestions?all=1" : "/api/suggestions"),
+    /** `pending`: only what the caller can decide now. `taskId`: one task's approvals. */
+    listApprovals: (query: { pending?: boolean; taskId?: string } = {}) => {
+      const params = new URLSearchParams();
+      if (query.pending) params.set("pending", "1");
+      if (query.taskId) params.set("taskId", query.taskId);
+      const search = params.toString();
+      return call<ApprovalList>("GET", `/api/approvals${search ? `?${search}` : ""}`);
+    },
+    getApproval: (approvalId: string) =>
+      call<ApprovalView>("GET", `/api/approvals/${id(approvalId)}`),
+    decideApproval: (approvalId: string, request: DecideRequest) =>
+      call<ApprovalView>("POST", `/api/approvals/${id(approvalId)}/decide`, request),
 
     listUsers: () => call<UserList>("GET", "/api/users"),
     /** Admin: a user's tasks, archived ones included (an offboarded person's sessions). */

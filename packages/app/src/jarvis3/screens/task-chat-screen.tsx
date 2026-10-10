@@ -20,7 +20,9 @@ import {
 } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
 import type { TaskView } from "../api-types";
-import { jarvis3Api, tasksStore } from "../client";
+import { REFRESH_TASK_APPROVALS_MS } from "../approvals";
+import { approvalsStore, jarvis3Api, tasksStore } from "../client";
+import { useApprovals } from "../hooks";
 import { type ChatPhase, Jarvis3Error, planTaskChat, presentTask, taskAgentOnHost } from "../plan";
 import { messageOf, REFRESH_WHILE_CHANGING_MS } from "../stores";
 import { ensureTaskHost, findTaskHost } from "../task-host";
@@ -165,6 +167,7 @@ export function TaskChatScreen({ taskId }: { taskId: string }) {
     >
       {actionError ? <Banner tone="error">{actionError}</Banner> : null}
       {task?.error ? <Banner tone="error">{task.error}</Banner> : null}
+      <TaskApprovalNotice taskId={taskId} />
       <ChatPhaseView
         phase={phase}
         workspaceId={agentWorkspaceId}
@@ -175,6 +178,37 @@ export function TaskChatScreen({ taskId }: { taskId: string }) {
         onRetryConnect={connect}
       />
     </Jarvis3Frame>
+  );
+}
+
+/** One line when this task waits for the viewer's approval, with a link to it. */
+function TaskApprovalNotice({ taskId }: { taskId: string }) {
+  const router = useRouter();
+  const pending = useApprovals().pendingByTask[taskId];
+  useEffect(() => {
+    void approvalsStore.loadForTask(taskId);
+    const timer = setInterval(
+      () => void approvalsStore.loadForTask(taskId),
+      REFRESH_TASK_APPROVALS_MS,
+    );
+    return () => clearInterval(timer);
+  }, [taskId]);
+  const first = pending?.[0];
+  const count = pending?.length ?? 0;
+  const review = useCallback(() => {
+    if (count > 1) router.push("/approvals" as Href);
+    else if (first) router.push(`/approvals/${encodeURIComponent(first.id)}` as Href);
+  }, [router, count, first]);
+  if (!first) return null;
+  return (
+    <Banner tone="info" testID="jarvis3-chat-approval">
+      {count > 1
+        ? `${count} requests from this task wait for your decision.`
+        : `Waiting for your decision: ${first.preview.summary}`}
+      <Button variant="outline" size="sm" onPress={review} testID="jarvis3-chat-approval-review">
+        Review
+      </Button>
+    </Banner>
   );
 }
 

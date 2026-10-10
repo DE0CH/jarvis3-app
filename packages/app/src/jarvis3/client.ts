@@ -1,6 +1,7 @@
 // The jarvis3 variant's singletons: the API client and the stores.
 import { Platform } from "react-native";
 import { createJarvis3Api } from "./api";
+import { createApprovalsStore } from "./approvals";
 import { getInstanceUrl } from "./config";
 import { deviceHeaders } from "./device-token";
 import { registerJarvis3InstanceUrl } from "./ws-hook";
@@ -27,5 +28,6 @@ export const tasksStore = createTasksStore(jarvis3Api, timers);
 export const accountStore = createAccountStore(jarvis3Api, timers);
 export const noticesStore = createNoticesStore(jarvis3Api, accountStore);
 export const layerStore = createLayerStore(jarvis3Api);
+export const approvalsStore = createApprovalsStore(jarvis3Api, accountStore);
 
 registerJarvis3InstanceUrl();
