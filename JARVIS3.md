@@ -163,9 +163,11 @@ run in parallel on GitHub `macos-26` runners, 40 to 60 min each:
   Sign in, the system sign-in sheet, the mock's sign-in page (standing in for Cloudflare Access),
   the `jarvis3://paired` redirect, the task list loaded with the device token, and a relaunch that
   stays paired. Screenshots go to the `jarvis3-ios-simulator` artifact; they hold mock data only.
-- **testflight**: builds with the instance's URL, archives, cloud-signs with the App Store Connect
-  API key (`-allowProvisioningUpdates`, no certificates anywhere) and uploads. `CFBundleVersion` is
-  `<run number>.<attempt>`; the marketing version comes from `packages/app/package.json`.
+- **testflight**: builds with the instance's URL, archives unsigned, then `-exportArchive` with
+  `-allowProvisioningUpdates` and the App Store Connect API key signs the app with Apple's
+  cloud-managed distribution certificate and uploads it (no certificates or profiles anywhere).
+  `CFBundleVersion` is `<run number>.<attempt>`; the marketing version comes from
+  `packages/app/package.json`.
 
 The instance is never in git. Per build it comes from the repository's Actions settings:
 
@@ -189,6 +191,10 @@ already in the Info.plist, so builds need no export-compliance answer.
 
 Pitfalls:
 
+- Keep the archive unsigned. A signed archive makes automatic signing mint a new Apple Development
+  certificate on every fresh runner, and once the team reaches Apple's certificate limit the archive
+  fails with "Choose a certificate to revoke". Revoking old ones is not a fix: a development-signed
+  app installed from one of them stops launching.
 - `APP_VARIANT=jarvis3` must be set for every step. Xcode's "Bundle React Native code" phase
   re-reads `app.config.js`; without it the app embeds upstream's config.
 - Build with Xcode 26. An app linked against the iOS 27 SDK must adopt the UIScene life cycle, and

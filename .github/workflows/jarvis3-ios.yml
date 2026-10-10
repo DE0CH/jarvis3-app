@@ -3,7 +3,7 @@
 # - simulator: a build pointed at the MOCK instance (http://localhost:8090), and Maestro walks the
 #   real pairing flow on a simulator. Its screenshots hold mock data only.
 # - testflight: a build pointed at the instance (secret JARVIS3_INSTANCE_URL), archived,
-#   cloud-signed with the App Store Connect API key and uploaded to TestFlight.
+#   unsigned, then exported, cloud-signed with the App Store Connect API key and uploaded.
 # Nothing about the instance is committed: its URL is a secret, the bundle id and app name are
 # repository variables. Logs never print the URL (secrets are masked).
 name: jarvis3 iOS
@@ -133,22 +133,32 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
         run: packages/app/jarvis3-ios/prepare.sh
 
-      - name: Archive, sign and upload to TestFlight
+      - name: Archive (unsigned)
+        # Signing at archive time makes automatic signing mint a new Apple Development certificate on
+        # every fresh runner, and the team is at Apple's certificate limit. The archive stays unsigned
+        # and the export below signs it with Apple's cloud-managed distribution certificate.
         working-directory: packages/app/ios
+        run: |
+          set -o pipefail
+          NAME=$(cat .jarvis3-name)
+          xcodebuild archive -workspace "$NAME.xcworkspace" -scheme "$NAME" -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=S64YL394S3 \
+            2>&1 | tee "$RUNNER_TEMP/archive.log" | grep -E "error:|\*\* " || true
+          grep -q "ARCHIVE SUCCEEDED" "$RUNNER_TEMP/archive.log"
+
+      - name: Export, cloud-sign and upload to TestFlight
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
         run: |
           set -o pipefail
-          NAME=$(cat .jarvis3-name)
           KEY="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
           printf '%s\n' "$ASC_PRIVATE_KEY" > "$KEY"
           trap 'rm -f "$KEY"' EXIT
-          AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$KEY" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
-          xcodebuild -workspace "$NAME.xcworkspace" -scheme "$NAME" -configuration Release \
-            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/app.xcarchive" \
-            DEVELOPMENT_TEAM=S64YL394S3 CODE_SIGN_STYLE=Automatic "${AUTH[@]}" archive | tail -n 40
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/app.xcarchive" \
-            -exportOptionsPlist "$GITHUB_WORKSPACE/packages/app/jarvis3-ios/ExportOptions.plist" \
-            -exportPath "$RUNNER_TEMP/export" "${AUTH[@]}" | tail -n 40
+            -exportOptionsPlist packages/app/jarvis3-ios/ExportOptions.plist -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates -authenticationKeyPath "$KEY" -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" 2>&1 | tee "$RUNNER_TEMP/export.log" | tail -n 30
+          grep -q "EXPORT SUCCEEDED\|Upload succeeded" "$RUNNER_TEMP/export.log"
