@@ -17,6 +17,7 @@ import type {
   WakeupView,
 } from "./api-types";
 import type { Tone } from "./plan";
+import { countOf } from "./count";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -379,7 +380,7 @@ export function taskExtrasLine(input: {
 }): string | null {
   const parts: string[] = [];
   if (input.channel && input.channel.posts > 0) {
-    const posts = input.channel.posts === 1 ? "1 post" : `${input.channel.posts} posts`;
+    const posts = countOf(input.channel.posts, "post");
     parts.push(input.channel.unread > 0 ? `${posts} (${input.channel.unread} new)` : posts);
   }
   const armed = wakeupsOrdered(input.wakeups).filter((w) => w.state === "armed");
@@ -395,9 +396,15 @@ export function taskExtrasLine(input: {
 
 /** Where a notice's button goes, and its label; null when it has none. */
 export function noticeTarget(
-  notice: Pick<NoticeView, "kind" | "taskId">,
+  notice: Pick<NoticeView, "kind" | "taskId" | "approvalId">,
 ): { href: string; label: string } | null {
-  if (notice.kind === "approval_needed") return { href: "/approvals", label: "Review" };
+  if (notice.kind === "approval_needed") {
+    // Servers before jarvis3 e7654a6 don't name the approval: open the queue.
+    const href = notice.approvalId
+      ? `/approvals/${encodeURIComponent(notice.approvalId)}`
+      : "/approvals";
+    return { href, label: "Review" };
+  }
   if (notice.kind === "schedule_skipped") return { href: "/scheduled", label: "Schedules" };
   if (!notice.taskId) return null;
   const id = encodeURIComponent(notice.taskId);

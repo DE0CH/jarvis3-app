@@ -397,7 +397,19 @@ export function createMockSchedules(deps: MockSchedulesDeps) {
         return [200, w];
       },
     ],
-    ["GET", /^\/api\/channels$/, ({ user }) => [200, { channels: channelsOf(user.id) }]],
+    [
+      "GET",
+      /^\/api\/channels$/,
+      ({ user, query }) => {
+        if (query.get("all") === "1") {
+          if (!user.isAdmin) throw deps.fail(404, "not_found", "not found");
+          return [200, { channels: channelsOf(null) }];
+        }
+        const forUser = query.get("userId") ?? user.id;
+        if (forUser !== user.id && !user.isAdmin) throw deps.fail(404, "not_found", "not found");
+        return [200, { channels: channelsOf(forUser) }];
+      },
+    ],
     [
       "GET",
       new RegExp(`^/api/tasks/${ID}/posts$`),

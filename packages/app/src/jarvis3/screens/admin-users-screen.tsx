@@ -10,6 +10,7 @@ import { SettingsCard, SettingsInput, SettingsRow, SettingsSection } from "@/com
 import { Button } from "@/components/ui/button";
 import { openExternalUrl } from "@/utils/open-external-url";
 import type {
+  ChannelView,
   PersonalLayerView,
   SetLimitsRequest,
   TaskView,
@@ -30,6 +31,7 @@ import {
 import { messageOf } from "../stores";
 import { Banner, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
 import { SuggestionsCard, useSuggestions } from "./suggestions";
+import { countOf } from "../count";
 
 export function AdminUsersScreen() {
   const account = useAccount();
@@ -183,7 +185,9 @@ function UserRow({
 function UserRecords({ userId }: { userId: string }) {
   const [tasks, setTasks] = useState<TaskView[] | null>(null);
   const [layer, setLayer] = useState<PersonalLayerView | null>(null);
+  const [channels, setChannels] = useState<ChannelView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const channelsOn = useAccount().me?.features?.schedules === true;
 
   useEffect(() => {
     const run = async () => {
@@ -200,6 +204,14 @@ function UserRecords({ userId }: { userId: string }) {
     };
     void run();
   }, [userId]);
+
+  useEffect(() => {
+    if (!channelsOn) return;
+    jarvis3Api
+      .listChannels(userId)
+      .then(({ channels: list }) => setChannels(list))
+      .catch((e: unknown) => setError(messageOf(e)));
+  }, [userId, channelsOn]);
 
   const router = useRouter();
   const filesOn = useAccount().me?.features?.files === true;
@@ -243,6 +255,14 @@ function UserRecords({ userId }: { userId: string }) {
           ))}
         </>
       ) : null}
+      {channels && channels.length > 0 ? (
+        <>
+          <Text style={styles.subhead}>Channels</Text>
+          {channels.map((channel) => (
+            <ChannelRecord key={channel.taskId} channel={channel} />
+          ))}
+        </>
+      ) : null}
       {layer ? (
         <>
           <Text style={styles.subhead}>Personal layer</Text>
@@ -269,9 +289,37 @@ function layerSummary(layer: PersonalLayerView): string {
   return [
     layer.instructions.trim() ? "Has instructions" : "No instructions",
     skills ? `skills: ${skills}` : "no skills",
-    `${layer.notes.length} note${layer.notes.length === 1 ? "" : "s"}`,
-    `${layer.versions.length} archived version${layer.versions.length === 1 ? "" : "s"}`,
+    countOf(layer.notes.length, "note"),
+    countOf(layer.versions.length, "archived version"),
   ].join("; ");
+}
+
+/** A task's channel, opened read-only (an admin's reading leaves the owner's posts unread). */
+function ChannelRecord({ channel }: { channel: ChannelView }) {
+  const router = useRouter();
+  const open = useCallback(
+    () => router.push(`/channels/${encodeURIComponent(channel.taskId)}` as Href),
+    [router, channel.taskId],
+  );
+  const unread = channel.unread > 0 ? `, ${channel.unread} unread by them` : "";
+  return (
+    <View style={styles.taskRow}>
+      <View style={styles.taskText}>
+        <Text style={styles.body} numberOfLines={1}>
+          {channel.taskTitle}
+        </Text>
+        <Text style={styles.hint}>{`${countOf(channel.posts, "post")}${unread}`}</Text>
+      </View>
+      <Button
+        variant="ghost"
+        size="sm"
+        onPress={open}
+        testID={`jarvis3-user-channel-${channel.taskId}`}
+      >
+        Open channel
+      </Button>
+    </View>
+  );
 }
 
 function TaskRecord({

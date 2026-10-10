@@ -25,6 +25,7 @@ export function exampleApprovals(taskId: string, taskTitle: string, base = Date.
     taskId,
     taskTitle,
     user: ALICE,
+    userRole: "staff",
     state: "pending" as const,
     options: null,
     changeHash: null,

@@ -224,7 +224,9 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
       call<SchedulePreview>("POST", "/api/schedules/preview", request),
     listWakeups: (taskId: string) => call<WakeupList>("GET", `/api/wakeups?taskId=${id(taskId)}`),
     cancelWakeup: (wakeupId: string) => call<WakeupView>("DELETE", `/api/wakeups/${id(wakeupId)}`),
-    listChannels: () => call<ChannelList>("GET", "/api/channels"),
+    /** The caller's channels, or (an admin) another user's. */
+    listChannels: (userId?: string) =>
+      call<ChannelList>("GET", userId ? `/api/channels?userId=${id(userId)}` : "/api/channels"),
     listPosts: (taskId: string) => call<ChannelPostList>("GET", `/api/tasks/${id(taskId)}/posts`),
     markPostsRead: (taskId: string) =>
       call<MarkPostsReadResult>("POST", `/api/tasks/${id(taskId)}/posts/read`),

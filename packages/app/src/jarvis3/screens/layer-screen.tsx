@@ -19,6 +19,7 @@ import {
   type SuggestionsState,
   useSuggestions,
 } from "./suggestions";
+import { countOf } from "../count";
 
 type Pending = { kind: "reset" } | { kind: "skill"; name: string } | { kind: "note"; id: string };
 
@@ -295,7 +296,7 @@ function SkillRow({
   return (
     <SettingsRow
       label={skill.name}
-      hint={`${count} file${count === 1 ? "" : "s"}`}
+      hint={countOf(count, "file")}
       testID={`jarvis3-skill-${skill.name}`}
     >
       <View style={styles.inlineButtons}>

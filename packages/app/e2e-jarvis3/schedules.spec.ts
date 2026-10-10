@@ -306,6 +306,33 @@ test("the schedules page, a new schedule with its preview, Run now, On/Off, Dele
   expect(instance.state.schedules.some((s) => s.id === created?.id)).toBe(false);
 });
 
+test("admin: a person's channels from the Users page, read-only, nothing marked read", async ({
+  page,
+  context,
+}) => {
+  await signIn(context, "admin@example.org");
+  await page.goto(`${instance.url}/admin/users`);
+  await page.getByTestId("jarvis3-user-u-alice").getByText("Tasks & layer").click();
+  const records = page.getByTestId("jarvis3-user-records-u-alice");
+  await expect(records).toContainText(TASK_TITLE);
+  await expect(records).toContainText("2 posts, 1 unread by them");
+  await page.getByTestId(`jarvis3-user-channel-${TASK}`).click();
+  await expect(page).toHaveURL(new RegExp(`/channels/${TASK}$`));
+  await expect(page.getByTestId("jarvis3-channel-posts")).toContainText(
+    "Supplier summary, week 40",
+  );
+  const banner = page.getByTestId("jarvis3-channel-read-only");
+  await expect(banner).toBeVisible();
+  await expect(page.getByTestId("jarvis3-wakeups")).toContainText("supplier-reply");
+  await expect(page.getByTestId("jarvis3-wakeup-cancel-w-reply")).toHaveCount(0);
+  await expect(page.getByTestId("jarvis3-channel-open-chat")).toHaveCount(0);
+  await shoot(page, "channel-admin", () => expect(banner).toBeVisible());
+  // reading it changed nothing for alice
+  expect(instance.state.requests).not.toContain(`POST /api/tasks/${TASK}/posts/read`);
+  expect(instance.state.posts.find((p) => p.id === "p-new")?.read).toBe(false);
+  await context.clearCookies();
+});
+
 test("a task's channel and wakeups: posts read on opening, cancel a wakeup", async ({
   page,
   context,
@@ -313,7 +340,7 @@ test("a task's channel and wakeups: posts read on opening, cancel a wakeup", asy
   await signIn(context, "alice@example.org");
   await page.goto(`${instance.url}/tasks`);
   const channelButton = page.getByTestId(`jarvis3-task-channel-${TASK}`);
-  await expect(channelButton).toHaveText("1 new posts");
+  await expect(channelButton).toHaveText("1 new post");
   await expect(page.getByTestId(`jarvis3-task-${TASK}`)).toContainText("From a schedule");
 
   // The chat's one-line summary links to the channel.

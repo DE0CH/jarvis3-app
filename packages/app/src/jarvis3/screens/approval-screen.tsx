@@ -20,8 +20,8 @@ import {
   type DecideInput,
   isDecidableNow,
 } from "../approvals";
-import { approvalsStore, jarvis3Api } from "../client";
-import { useAccount, useApprovals } from "../hooks";
+import { approvalsStore } from "../client";
+import { useApprovals } from "../hooks";
 import { openApprovalPage } from "../server-page";
 import { messageOf, REFRESH_WHILE_CHANGING_MS } from "../stores";
 import { Banner, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
@@ -187,31 +187,6 @@ function Outcome({ approval }: { approval: ApprovalView }) {
   );
 }
 
-/** The role of the asking user, for the access grant's choice (admins can read it). */
-function useRoleOf(approval: ApprovalView): string | null {
-  const account = useAccount();
-  const isAdmin = account.me?.user.isAdmin === true;
-  const [role, setRole] = useState<string | null>(null);
-  const needed = approval.kind === "access" && isAdmin;
-  const userId = approval.user.id;
-  useEffect(() => {
-    if (!needed) return;
-    let live = true;
-    jarvis3Api
-      .listUsers()
-      .then(({ users }) => {
-        const found = users.find((detail) => detail.user.id === userId);
-        if (live && found) setRole(found.user.role);
-        return undefined;
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, [needed, userId]);
-  return role;
-}
-
 function DecideControls({ approval, deciding }: { approval: ApprovalView; deciding: boolean }) {
   const [denying, setDenying] = useState(false);
   const [denyNote, setDenyNote] = useState("");
@@ -219,7 +194,7 @@ function DecideControls({ approval, deciding }: { approval: ApprovalView; decidi
   const [answerKey, setAnswerKey] = useState(0);
   const [scope, setScope] = useState<"task" | "role">("task");
   const [pageError, setPageError] = useState<string | null>(null);
-  const role = useRoleOf(approval);
+  const role = approval.userRole ?? null;
 
   const send = useCallback(
     (input: DecideInput) => void approvalsStore.decide(approval, input),

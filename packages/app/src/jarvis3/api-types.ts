@@ -1,4 +1,4 @@
-// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit 24f8b75); refresh with
+// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit e7654a6); refresh with
 // scripts/jarvis3-sync-api-types.sh. Type-only: never add runtime code here.
 // The Jarvis 3 instance API contract: request and response shapes of every route.
 // docs/API.md describes the routes and who may call them; this module is the machine-checked
@@ -601,6 +601,12 @@ export interface NoticeView {
     | "wakeup";
   text: string;
   taskId: string | null;
+  /**
+   * The approval an "approval_needed" or "approval_decided" notice is about (GET /api/approvals/:id);
+   * null for other notices and for notices made before the server recorded it. Optional: absent on
+   * older servers.
+   */
+  approvalId?: string | null;
   createdAt: IsoTime;
   /** Whether the caller has marked it read (POST /api/notices/read). */
   read: boolean;
@@ -719,6 +725,11 @@ export interface ApprovalView {
   taskTitle: string | null;
   /** The task's owner, on whose behalf it was asked. */
   user: { id: string; email: string; name: string };
+  /**
+   * The asking user's role now (an access request's "role" grant scope names it); null if the user
+   * is gone. Optional: absent on older servers.
+   */
+  userRole?: string | null;
   kind: ApprovalKind;
   approver: ApprovalLevel;
   state: ApprovalState;

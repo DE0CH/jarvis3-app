@@ -10,6 +10,7 @@ import { useAccount, useTaskExtras, useTasks } from "../hooks";
 import { myUsageRows, orderTasks, presentTask } from "../plan";
 import { pruneTaskHosts } from "../task-host";
 import { Banner, CenteredDialog, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
+import { countOf } from "../count";
 
 type Pending = "resume" | "pause" | "delete";
 
@@ -176,7 +177,7 @@ function TaskRow({
             onPress={openChannel}
             testID={`jarvis3-task-channel-${task.id}`}
           >
-            {channel.unread > 0 ? `${channel.unread} new posts` : "Channel"}
+            {channel.unread > 0 ? countOf(channel.unread, "new post") : "Channel"}
           </Button>
         ) : null}
         {view.canResume ? (

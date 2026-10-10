@@ -292,7 +292,8 @@ test("another user sees none of alice's files or hits; an admin can search every
   await page.goto(`${instance.url}/search`);
   const box = page.getByRole("textbox", { name: "Search your tasks" }).filter({ visible: true });
   await box.fill("duplicate invoice");
-  await visible(page, "jarvis3-search-submit").click();
+  // Enter in the box searches, like the button
+  await box.press("Enter");
   await expect(visible(page, `jarvis3-search-group-${BOBS}`)).toBeVisible();
   await expect(visible(page, `jarvis3-search-group-${ARCHIVED}`)).toHaveCount(0);
 

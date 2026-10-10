@@ -45,6 +45,19 @@ test.beforeAll(async () => {
     tasks: [task],
     approvals: exampleApprovals(TASK, TITLE),
     ownerId: "u-admin",
+    notices: {
+      "u-admin": [
+        {
+          id: "n-access",
+          kind: "approval_needed",
+          text: "Access request: Let this task use “Send email from your own mailbox”",
+          taskId: TASK,
+          approvalId: APPROVAL_IDS.access,
+          createdAt: t,
+          read: false,
+        },
+      ],
+    },
   });
 });
 
@@ -132,6 +145,14 @@ test("admin and owner: access grant, a question's answer, a Tier 3 change", asyn
   context,
 }) => {
   await signIn(context, "admin@example.org");
+  // The approval_needed notice opens that approval, not the queue.
+  await page.goto(`${instance.url}/notices`);
+  await page.getByTestId("jarvis3-notice-n-access").getByRole("button", { name: "Review" }).click();
+  await expect(page).toHaveURL(new RegExp(`/approvals/${APPROVAL_IDS.access}$`));
+  await expect(page.getByTestId("jarvis3-approval-scope-role")).toContainText(
+    "Everyone with the role “staff”",
+  );
+
   await page.goto(`${instance.url}/approvals`);
   await expect(page.getByTestId("jarvis3-nav-approvals")).toContainText("Approvals (3)");
   const pending = page.getByTestId("jarvis3-approvals-pending");
@@ -142,7 +163,9 @@ test("admin and owner: access grant, a question's answer, a Tier 3 change", asyn
   // Access request: who gets it.
   await page.getByTestId(`jarvis3-approval-open-${APPROVAL_IDS.access}`).click();
   const scope = page.getByTestId("jarvis3-approval-scope-role");
+  // The role comes with the approval (ApprovalView.userRole), not from the admin-only user list.
   await expect(scope).toContainText("Everyone with the role “staff”");
+  expect(instance.state.requests).not.toContain("GET /api/users");
   await shoot(page, "access", () => expect(scope).toBeVisible());
   await page.getByTestId("jarvis3-approval-scope-role").click();
   await page.getByTestId("jarvis3-approval-approve").click();

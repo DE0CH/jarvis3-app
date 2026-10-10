@@ -1,6 +1,7 @@
 // A task's channel and wakeups: what the task's agent posted for its owner (reports, the result of
 // a scheduled run), newest first, and the wakeups it armed, with Cancel. Opening it marks the posts
-// read (only for the task's owner; the server ignores an admin's read).
+// read for the task's owner. An admin opening someone else's channel (from the Users page) gets it
+// read-only: no Cancel, no Open chat, and nothing is marked read.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { useRouter, type Href } from "expo-router";
@@ -10,7 +11,7 @@ import { SettingsCard, SettingsRow, SettingsSection } from "@/components/setting
 import { Button } from "@/components/ui/button";
 import type { ChannelPostView, TaskView, WakeupView } from "../api-types";
 import { jarvis3Api, taskExtrasStore } from "../client";
-import { useTaskExtras } from "../hooks";
+import { useAccount, useTaskExtras } from "../hooks";
 import { describeWakeupWhen, wakeupStateLabel, wakeupsOrdered } from "../schedules";
 import { messageOf } from "../stores";
 import { Banner, CenteredDialog, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
@@ -24,21 +25,29 @@ export function TaskChannelScreen({ taskId }: { taskId: string }) {
   const [task, setTask] = useState<TaskView | null>(null);
   const [taskError, setTaskError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<WakeupView | null>(null);
+  const myId = useAccount().me?.user.id ?? null;
+  // Someone else's task: an admin reading it from the Users page.
+  const readOnly = task !== null && task.userId !== myId;
 
   useEffect(() => {
     jarvis3Api
       .getTask(taskId)
-      .then(setTask)
+      .then((loaded) => {
+        setTask(loaded);
+        // Only the owner's opening marks posts read.
+        void taskExtrasStore.loadPosts(taskId, { markRead: loaded.userId === myId });
+        return undefined;
+      })
       .catch((error: unknown) => setTaskError(messageOf(error)));
-    void taskExtrasStore.loadPosts(taskId, { markRead: true });
     void taskExtrasStore.loadWakeups(taskId);
-  }, [taskId]);
+  }, [taskId, myId]);
 
   const openChat = useCallback(
     () => router.push(`/tasks/${encodeURIComponent(taskId)}` as Href),
     [router, taskId],
   );
-  const canOpenChat = task !== null && task.state !== "archived" && task.state !== "destroying";
+  const canOpenChat =
+    task !== null && !readOnly && task.state !== "archived" && task.state !== "destroying";
   const actions = useMemo(
     () =>
       canOpenChat ? (
@@ -64,8 +73,14 @@ export function TaskChannelScreen({ taskId }: { taskId: string }) {
       testID="jarvis3-channel"
       actions={actions}
     >
+      {readOnly ? (
+        <Banner tone="info" testID="jarvis3-channel-read-only">
+          {"Read only: this is another person's task. Opening it doesn't mark their posts read."}
+        </Banner>
+      ) : null}
       <WakeupsSection
         entry={wakeups}
+        readOnly={readOnly}
         cancelling={extras.cancelling}
         cancelErrors={extras.cancelErrors}
         onCancel={setCancelling}
@@ -154,11 +169,13 @@ function PostCard({ post }: { post: ChannelPostView }) {
 
 function WakeupsSection({
   entry,
+  readOnly,
   cancelling,
   cancelErrors,
   onCancel,
 }: {
   entry: { loaded: boolean; wakeups: WakeupView[]; error: string | null } | undefined;
+  readOnly: boolean;
   cancelling: Record<string, true>;
   cancelErrors: Record<string, string>;
   onCancel: (wakeup: WakeupView) => void;
@@ -185,7 +202,7 @@ function WakeupsSection({
               wakeup={wakeup}
               busy={cancelling[wakeup.id] === true}
               error={cancelErrors[wakeup.id] ?? null}
-              onCancel={onCancel}
+              onCancel={readOnly ? null : onCancel}
             />
           ))}
         </SettingsCard>
@@ -203,11 +220,12 @@ function WakeupRow({
   wakeup: WakeupView;
   busy: boolean;
   error: string | null;
-  onCancel: (wakeup: WakeupView) => void;
+  /** null: read-only, no Cancel. */
+  onCancel: ((wakeup: WakeupView) => void) | null;
 }) {
   const state = wakeupStateLabel(wakeup);
   const pill = useMemo(() => <StatusPill tone={state.tone} label={state.label} />, [state]);
-  const cancel = useCallback(() => onCancel(wakeup), [onCancel, wakeup]);
+  const cancel = useCallback(() => onCancel?.(wakeup), [onCancel, wakeup]);
   const hint = useMemo(
     () => (
       <View style={styles.wakeupHint}>
@@ -228,7 +246,7 @@ function WakeupRow({
       error={error ?? undefined}
       testID={`jarvis3-wakeup-${wakeup.id}`}
     >
-      {wakeup.state === "armed" ? (
+      {wakeup.state === "armed" && onCancel ? (
         <Button
           variant="ghost"
           size="sm"

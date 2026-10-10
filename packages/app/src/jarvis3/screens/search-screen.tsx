@@ -5,8 +5,10 @@ import { useCallback, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { StyleSheet } from "react-native-unistyles";
-import { SettingsCard, SettingsInput } from "@/components/settings";
+import { SettingsCard, SettingsRow } from "@/components/settings";
 import { Button } from "@/components/ui/button";
+import { FormTextInput } from "@/components/ui/form-field";
+import { useIsCompactFormFactor } from "@/constants/layout";
 import type { SearchHit, SearchResult } from "../api-types";
 import { jarvis3Api } from "../client";
 import { useAccount } from "../hooks";
@@ -26,6 +28,7 @@ import { formatWhen } from "./format";
 export function SearchScreen() {
   const account = useAccount();
   const isAdmin = account.me?.user.isAdmin === true;
+  const compact = useIsCompactFormFactor();
   const [text, setText] = useState("");
   const [everyone, setEveryone] = useState(false);
   const [result, setResult] = useState<SearchResult | null>(null);
@@ -61,13 +64,23 @@ export function SearchScreen() {
   return (
     <Jarvis3Frame title="Search" testID="jarvis3-search-screen">
       <SettingsCard>
-        <SettingsInput
+        <SettingsRow
           label="Search your tasks"
           hint="Finds words in what you and the agents wrote, in every task, archived ones too."
-          initialValue=""
-          onChangeText={setText}
-          placeholder="supplier invoice"
-        />
+        >
+          {/* Enter (the keyboard's Search key on a phone) searches, like the button. */}
+          <FormTextInput
+            initialValue=""
+            onChangeText={setText}
+            onSubmitEditing={submit}
+            returnKeyType="search"
+            placeholder="supplier invoice"
+            accessibilityLabel="Search your tasks"
+            size={compact ? "md" : "sm"}
+            style={styles.input}
+            testID="jarvis3-search-input"
+          />
+        </SettingsRow>
         <View style={styles.controls}>
           {isAdmin ? (
             <Button
@@ -166,6 +179,7 @@ export function Snippet({ snippet, matches }: { snippet: string; matches: [numbe
 }
 
 const styles = StyleSheet.create((theme) => ({
+  input: { minWidth: 180 },
   controls: {
     flexDirection: "row",
     justifyContent: "flex-end",

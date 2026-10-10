@@ -27,6 +27,7 @@ import { useAccount } from "../hooks";
 import { messageOf } from "../stores";
 import { Banner, CenteredDialog, EmptyState, Jarvis3Frame } from "../ui";
 import { formatWhen } from "./format";
+import { countOf } from "../count";
 
 function useFilesStore(userId: string): FilesStore {
   return useMemo(() => createFilesStore(jarvis3Api, userId), [userId]);
@@ -227,9 +228,7 @@ function Uploads({ items, onDismiss }: { items: UploadItem[]; onDismiss: () => v
       {running ? null : (
         <View style={styles.uploadRow}>
           <Text style={styles.hint}>
-            {failed.length
-              ? `${failed.length} upload${failed.length === 1 ? "" : "s"} failed.`
-              : "Uploaded."}
+            {failed.length ? `${countOf(failed.length, "upload")} failed.` : "Uploaded."}
           </Text>
           <Button
             variant="ghost"
@@ -315,7 +314,7 @@ function FolderRow({ folder, onOpen }: { folder: FolderEntry; onOpen: (dir: stri
           {`${folder.name}/`}
         </Text>
         <Text style={styles.hint}>
-          {`${folder.count} file${folder.count === 1 ? "" : "s"} · ${formatBytes(folder.size)}`}
+          {`${countOf(folder.count, "file")} · ${formatBytes(folder.size)}`}
         </Text>
       </View>
     </Pressable>

@@ -9,6 +9,7 @@ import type {
   ToolsAdminView,
   UserDetail,
 } from "./api-types";
+import { countOf } from "./count";
 
 // ---- instance URL -----------------------------------------------------------------------
 
@@ -355,7 +356,7 @@ export function describeToolsUsage(detail: Pick<UserDetail, "tools">): string | 
   const own = " (set for this user)";
   const parts: string[] = [];
   if (tools.web) {
-    const calls = `${tools.web.calls} call${tools.web.calls === 1 ? "" : "s"}`;
+    const calls = countOf(tools.web.calls, "call");
     parts.push(
       `Web tools ${formatSpend(tools.web.spentUsd)} of ${formatLimit(tools.web.capUsd, "usd")}${tools.web.override ? own : ""} (${calls})`,
     );
@@ -417,7 +418,7 @@ export function myUsageRows(me: Pick<UserDetail, "limits" | "usage" | "tools">):
     },
   ];
   if (tools?.web) {
-    const calls = `${tools.web.calls} call${tools.web.calls === 1 ? "" : "s"}`;
+    const calls = countOf(tools.web.calls, "call");
     rows.push({
       key: "web",
       label: "Web search and fetching",
@@ -449,7 +450,7 @@ export function describeToolsAdmin(view: ToolsAdminView): string | null {
   ].filter(Boolean);
   parts.push(`Providers: ${providers.join(", ")}.`);
   if (view.search || view.fetch) {
-    const calls = `${view.web.calls} call${view.web.calls === 1 ? "" : "s"}`;
+    const calls = countOf(view.web.calls, "call");
     parts.push(
       `Everyone's web tools ${formatSpend(view.web.spentUsd)} of ${formatLimit(view.web.capUsd, "usd")} (${calls}) in ${view.month}.`,
     );
