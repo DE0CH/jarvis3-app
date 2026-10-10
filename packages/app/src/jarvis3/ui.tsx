@@ -1,8 +1,8 @@
 // Small building blocks for the Jarvis 3 screens, made of Paseo's own components and theme:
 // the page frame with its navigation, a centered question dialog (never alert()/confirm(), never
 // a bottom sheet), an inline banner and a status pill.
-import { Children, type ReactNode, useCallback } from "react";
-import { Modal, Pressable, Text, View } from "react-native";
+import { Children, type ReactNode, type Ref, useCallback } from "react";
+import { Modal, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
 import { usePathname, useRouter, type Href } from "expo-router";
 import { StyleSheet } from "react-native-unistyles";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -31,6 +31,8 @@ const SCHEDULES_NAV: NavItem = {
   label: SCHEDULES_LABEL,
   testID: "jarvis3-nav-schedules",
 };
+const FILES_NAV: NavItem = { href: "/files", label: "Files", testID: "jarvis3-nav-files" };
+const SEARCH_NAV: NavItem = { href: "/search", label: "Search", testID: "jarvis3-nav-search" };
 const ADMIN_NAV: NavItem = { href: "/admin/users", label: "Users", testID: "jarvis3-nav-admin" };
 const NOTICES_HREF = "/notices";
 const APPROVALS_HREF = "/approvals";
@@ -39,7 +41,10 @@ function isCurrent(pathname: string, href: string): boolean {
   if (pathname === href) return true;
   if (href === "/tasks" && pathname.startsWith("/channels/")) return true;
   return (
-    (href === "/tasks" || href === APPROVALS_HREF || href === SCHEDULES_HREF) &&
+    (href === "/tasks" ||
+      href === APPROVALS_HREF ||
+      href === SCHEDULES_HREF ||
+      href === "/search") &&
     pathname.startsWith(`${href}/`)
   );
 }
@@ -49,12 +54,15 @@ export function Jarvis3Frame({
   actions,
   children,
   scroll = true,
+  scrollRef,
   testID,
 }: {
   title: string;
   actions?: ReactNode;
   children: ReactNode;
   scroll?: boolean;
+  /** The page's scroll view, for a screen that scrolls to something (the transcript's hit). */
+  scrollRef?: Ref<NativeScrollView>;
   testID?: string;
 }) {
   const insets = useSafeAreaInsets();
@@ -70,9 +78,17 @@ export function Jarvis3Frame({
     label: approvalsLabel(account.me?.pendingApprovals ?? 0),
     testID: "jarvis3-nav-approvals",
   };
-  // Scheduled tasks only on a server that has them (features.schedules).
-  const scheduled = account.me?.features?.schedules ? [SCHEDULES_NAV] : [];
-  const base = [TASKS_NAV, ...scheduled, approvals, LAYER_NAV, notices];
+  const features = account.me?.features;
+  // Scheduled tasks, files and search only on a server that has them (features.*).
+  const base = [
+    TASKS_NAV,
+    ...(features?.schedules ? [SCHEDULES_NAV] : []),
+    ...(features?.files ? [FILES_NAV] : []),
+    ...(features?.search ? [SEARCH_NAV] : []),
+    approvals,
+    LAYER_NAV,
+    notices,
+  ];
   const nav = account.me?.user.isAdmin ? [...base, ADMIN_NAV] : base;
   const body = <View style={styles.column}>{children}</View>;
   return (
@@ -99,6 +115,7 @@ export function Jarvis3Frame({
       </View>
       {scroll ? (
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 32 }]}
         >
           {body}

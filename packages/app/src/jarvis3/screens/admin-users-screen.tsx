@@ -4,6 +4,7 @@
 // Shown only to admins; the server refuses the routes to anyone else (404).
 import { useCallback, useEffect, useState } from "react";
 import { Text, View } from "react-native";
+import { useRouter, type Href } from "expo-router";
 import { StyleSheet } from "react-native-unistyles";
 import { SettingsCard, SettingsInput, SettingsRow, SettingsSection } from "@/components/settings";
 import { Button } from "@/components/ui/button";
@@ -200,6 +201,12 @@ function UserRecords({ userId }: { userId: string }) {
     void run();
   }, [userId]);
 
+  const router = useRouter();
+  const filesOn = useAccount().me?.features?.files === true;
+  const openFiles = useCallback(
+    () => router.push(`/files?user=${encodeURIComponent(userId)}` as Href),
+    [router, userId],
+  );
   const download = useCallback((taskId: string) => {
     const run = async () => {
       try {
@@ -214,6 +221,19 @@ function UserRecords({ userId }: { userId: string }) {
   return (
     <View style={styles.records} testID={`jarvis3-user-records-${userId}`}>
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {filesOn ? (
+        <View style={styles.taskRow}>
+          <Text style={styles.subhead}>Files</Text>
+          <Button
+            variant="ghost"
+            size="sm"
+            onPress={openFiles}
+            testID={`jarvis3-user-files-${userId}`}
+          >
+            Open files
+          </Button>
+        </View>
+      ) : null}
       {tasks ? (
         <>
           <Text style={styles.subhead}>Tasks</Text>

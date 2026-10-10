@@ -27,6 +27,9 @@ import type {
   CreateTaskRequest,
   DecideRequest,
   ErrorCode,
+  FileView,
+  SearchHit,
+  TranscriptEntry,
   MarkNoticesReadRequest,
   MeView,
   ModelList,
@@ -101,6 +104,18 @@ export interface MockInstanceOptions {
   schedules?: ScheduleDetail[];
   wakeups?: WakeupView[];
   posts?: ChannelPostView[];
+  /** userId -> files to start with (text contents). */
+  files?: Record<string, { path: string; text: string; source?: FileView["source"] }[]>;
+  /** taskId -> its indexed conversation (GET /api/search, GET /api/tasks/:id/transcript). */
+  transcripts?: Record<string, TranscriptEntry[]>;
+  /** The per-file limit and per-user quota the mock enforces (bytes). */
+  maxFileBytes?: number;
+  quotaBytes?: number;
+}
+
+interface StoredFile {
+  view: FileView;
+  bytes: Buffer;
 }
 
 export interface MockInstance {
@@ -116,6 +131,12 @@ export interface MockInstance {
     schedules: ScheduleDetail[];
     wakeups: WakeupView[];
     posts: ChannelPostView[];
+    /** userId -> path -> the stored file. */
+    files: Map<string, Map<string, StoredFile>>;
+    /** Every POST /api/tasks body, in order. */
+    createRequests: CreateTaskRequest[];
+    /** Download links handed out (GET /api/users/:id/files/<path>?link=1), in order. */
+    fileLinks: { path: string; url: string }[];
   };
   /** A post from a task's agent to its channel (what jarvis_post does), with its notice. */
   addPost(taskId: string, title: string, text: string): ChannelPostView;
@@ -176,6 +197,9 @@ interface Ctx {
   params: string[];
   query: URLSearchParams;
   body: () => Promise<unknown>;
+  /** The raw request body (file uploads). */
+  raw: () => Promise<Buffer>;
+  contentType: string;
 }
 type Handler = (ctx: Ctx) => [number, unknown] | Promise<[number, unknown]>;
 type Route = [method: string, pattern: RegExp, handler: Handler];
@@ -210,6 +234,8 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     features: {
       suggestions: true,
       schedules: true,
+      files: true,
+      search: true,
       ...(options.tools ? { tools: { search: true, fetch: true, proxy: true } } : {}),
     },
     unreadPosts: scheduled.unreadPosts(user.id),
@@ -221,6 +247,30 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     layers.set(userId, { current: structuredClone(content), versions: [] });
   }
   const created = new Map<string, string>(); // `${userId}:${requestId}` -> task id
+  const createRequests: CreateTaskRequest[] = [];
+  const fileLinks: { path: string; url: string }[] = [];
+  const transcripts = options.transcripts ?? {};
+  const maxFileBytes = options.maxFileBytes ?? 50 * 1024 * 1024;
+  const quotaBytes = options.quotaBytes ?? 1024 * 1024 * 1024;
+  const fileStore = new Map<string, Map<string, StoredFile>>();
+  for (const [userId, list] of Object.entries(options.files ?? {})) {
+    const map = new Map<string, StoredFile>();
+    for (const seed of list) {
+      const bytes = Buffer.from(seed.text);
+      map.set(seed.path, {
+        bytes,
+        view: {
+          path: seed.path,
+          size: bytes.length,
+          contentType: "text/plain",
+          updatedAt: "2026-10-09T09:00:00.000Z",
+          source: seed.source ?? "user",
+          taskId: null,
+        },
+      });
+    }
+    fileStore.set(userId, map);
+  }
   const startDelay = options.startDelayMs ?? 1500;
   let counter = 0;
 
@@ -430,6 +480,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   // ---- task handlers ----
 
   const startTask = (user: MockUser, request: CreateTaskRequest): TaskView => {
+    const attachments = request.attachments ?? [];
     counter += 1;
     const task: TaskView = {
       id: `new${counter.toString(16).padStart(13, "0")}`,
@@ -444,6 +495,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       updatedAt: now(),
       connected: false,
       agentId: null,
+      attachments,
     };
     tasks.unshift(task);
     if (options.newTaskDaemon) daemons[task.id] = options.newTaskDaemon;
@@ -454,6 +506,14 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     const request = (await body()) as CreateTaskRequest;
     if (!request.prompt || request.prompt.length > 16000) {
       throw new HttpError(400, "bad_request", "prompt is required");
+    }
+    createRequests.push(structuredClone(request));
+    const attachments = request.attachments ?? [];
+    if (attachments.length > 20) throw new HttpError(400, "bad_request", "at most 20 attachments");
+    for (const attached of attachments) {
+      if (!filesOf(user.id).has(attached)) {
+        throw new HttpError(400, "bad_request", `attachment ${attached} is not in your files`);
+      }
     }
     const key = `${user.id}:${request.requestId ?? ""}`;
     const repeat = request.requestId ? tasks.find((t) => t.id === created.get(key)) : null;
@@ -612,6 +672,165 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     return [200, detailOf(target)];
   };
 
+  // ---- files and transcript search (docs/API.md "Files", "Transcript search") ----
+
+  const filesOf = (userId: string): Map<string, StoredFile> => {
+    let map = fileStore.get(userId);
+    if (!map) {
+      map = new Map();
+      fileStore.set(userId, map);
+    }
+    return map;
+  };
+  const fileListOf = (userId: string) => {
+    const map = filesOf(userId);
+    const views = [...map.values()]
+      .map((f) => f.view)
+      .toSorted((a, b) => a.path.localeCompare(b.path));
+    return {
+      files: views,
+      usedBytes: views.reduce((sum, f) => sum + f.size, 0),
+      quotaBytes,
+      maxFileBytes,
+    };
+  };
+  const checkPath = (filePathText: string): string => {
+    const segments = filePathText.split("/");
+    if (
+      !filePathText ||
+      filePathText.length > 512 ||
+      segments.some((x) => !x || x === "." || x === ".." || x.length > 255)
+    ) {
+      throw new HttpError(400, "bad_request", `invalid file path ${filePathText}`);
+    }
+    return filePathText;
+  };
+  const filePath = (ctx: Ctx) =>
+    checkPath((ctx.params[1] ?? "").split("/").map(decodeURIComponent).join("/"));
+  const putFile: Handler = async (ctx) => {
+    const owner = userFor(ctx.user, ctx.params[0] ?? "");
+    const target = filePath(ctx);
+    const bytes = await ctx.raw();
+    const map = filesOf(owner.id);
+    const previous = map.get(target);
+    if (bytes.length > maxFileBytes)
+      throw new HttpError(413, "too_large", `the file is over the ${maxFileBytes}-byte limit`);
+    if (fileListOf(owner.id).usedBytes - (previous?.view.size ?? 0) + bytes.length > quotaBytes) {
+      throw new HttpError(413, "too_large", "over your storage quota");
+    }
+    const view: FileView = {
+      path: target,
+      size: bytes.length,
+      contentType: ctx.contentType || "application/octet-stream",
+      updatedAt: now(),
+      source: "user",
+      taskId: null,
+    };
+    map.set(target, { view, bytes });
+    return [previous ? 200 : 201, view];
+  };
+  const storedFile = (ctx: Ctx) => {
+    const owner = userFor(ctx.user, ctx.params[0] ?? "");
+    const stored = filesOf(owner.id).get(filePath(ctx));
+    if (!stored) throw new HttpError(404, "not_found", "no such file");
+    return { owner, stored };
+  };
+  const downloads = new Map<string, Buffer>();
+  const fileLink: Handler = (ctx) => {
+    const { stored } = storedFile(ctx);
+    if (ctx.query.get("link") !== "1")
+      throw new HttpError(400, "bad_request", "the mock answers ?link=1");
+    const token = `d${downloads.size + 1}-${Math.random().toString(36).slice(2)}`;
+    downloads.set(token, stored.bytes);
+    const expiresAt = new Date(Date.now() + 600_000).toISOString();
+    const url = `http://127.0.0.1:${port}/__mock/download/${token}`;
+    fileLinks.push({ path: stored.view.path, url });
+    return [200, { url, expiresAt }];
+  };
+  const deleteFile: Handler = (ctx) => {
+    const { owner, stored } = storedFile(ctx);
+    filesOf(owner.id).delete(stored.view.path);
+    return [200, { ok: true }];
+  };
+  const moveFile: Handler = async (ctx) => {
+    const owner = userFor(ctx.user, ctx.params[0] ?? "");
+    const { from, to } = (await ctx.body()) as { from: string; to: string };
+    const map = filesOf(owner.id);
+    const stored = map.get(checkPath(from));
+    if (!stored) throw new HttpError(404, "not_found", "no such file");
+    if (map.has(checkPath(to))) throw new HttpError(409, "conflict", `${to} already exists`);
+    map.delete(from);
+    const view = { ...stored.view, path: to, updatedAt: now() };
+    map.set(to, { view, bytes: stored.bytes });
+    return [200, view];
+  };
+  const transcriptOf = (taskId: string): TranscriptEntry[] => transcripts[taskId] ?? [];
+  const search: Handler = ({ user, query }) => {
+    const q = (query.get("q") ?? "").trim();
+    if (!q || q.length > 200)
+      throw new HttpError(400, "bad_request", "q must be 1..200 characters");
+    let visible: TaskView[];
+    if (query.get("all") === "1") {
+      requireAdmin(user);
+      visible = tasks;
+    } else {
+      const owner = userFor(user, query.get("userId") ?? user.id);
+      visible = tasks.filter((t) => t.userId === owner.id);
+    }
+    const terms = q.toLowerCase().split(/\s+/);
+    const hits: SearchHit[] = [];
+    for (const task of visible) {
+      for (const entry of transcriptOf(task.id)) {
+        const lower = entry.text.toLowerCase();
+        if (!terms.every((term) => lower.includes(term))) continue;
+        const matches: [number, number][] = [];
+        for (const term of terms) {
+          for (
+            let at = lower.indexOf(term);
+            at !== -1;
+            at = lower.indexOf(term, at + term.length)
+          ) {
+            matches.push([at, at + term.length]);
+          }
+        }
+        hits.push({
+          ...entry,
+          taskId: task.id,
+          taskTitle: task.title,
+          taskState: task.state,
+          userId: task.userId,
+          snippet: entry.text,
+          matches,
+        });
+      }
+    }
+    return [200, { query: q, hits: hits.slice(0, Number(query.get("limit") ?? 30)) }];
+  };
+  const transcript: Handler = ({ user, params, query }) => {
+    const task = ownTask(user, params[0] ?? "");
+    const agentId = query.get("agentId") ?? task.agentId;
+    const all = transcriptOf(task.id).filter((e) => !agentId || e.agentId === agentId);
+    const limit = Number(query.get("limit") ?? 50);
+    let from = 0;
+    if (query.has("around")) {
+      const at = all.findIndex((e) => e.seq >= Number(query.get("around")));
+      from = Math.max(0, (at === -1 ? all.length : at) - Math.floor(limit / 2));
+    } else if (query.has("before")) {
+      const at = all.findIndex((e) => e.seq >= Number(query.get("before")));
+      from = Math.max(0, (at === -1 ? all.length : at) - limit);
+      const entries = all.slice(from, at === -1 ? all.length : at);
+      return [200, { taskId: task.id, entries, hasOlder: from > 0, hasNewer: true }];
+    } else if (query.has("after")) {
+      from = all.findIndex((e) => e.seq > Number(query.get("after")));
+      if (from === -1) from = all.length;
+    }
+    const entries = all.slice(from, from + limit);
+    return [
+      200,
+      { taskId: task.id, entries, hasOlder: from > 0, hasNewer: from + limit < all.length },
+    ];
+  };
+
   // ---- scheduled tasks, wakeups, channels (mock-schedules.ts) ----
 
   const scheduled = createMockSchedules({
@@ -629,6 +848,17 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   const ID = "([^/]+)";
   const routes: Route[] = [
     ...scheduled.routes,
+    [
+      "GET",
+      new RegExp(`^/api/users/${ID}/files$`),
+      (ctx) => [200, fileListOf(userFor(ctx.user, ctx.params[0] ?? "").id)],
+    ],
+    ["POST", new RegExp(`^/api/users/${ID}/files/move$`), moveFile],
+    ["PUT", new RegExp(`^/api/users/${ID}/files/(.+)$`), putFile],
+    ["GET", new RegExp(`^/api/users/${ID}/files/(.+)$`), fileLink],
+    ["DELETE", new RegExp(`^/api/users/${ID}/files/(.+)$`), deleteFile],
+    ["GET", /^\/api\/search$/, search],
+    ["GET", new RegExp(`^/api/tasks/${ID}/transcript$`), transcript],
     ["GET", /^\/api\/me$/, ({ user }) => [200, meOf(user)]],
     ["GET", /^\/api\/models$/, () => [200, MODELS]],
     ["GET", /^\/api\/notices$/, ({ user }) => [200, { notices: noticesOf(user.id) }]],
@@ -782,6 +1012,14 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     };
   }
 
+  function readRaw(req: IncomingMessage): () => Promise<Buffer> {
+    return async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      return Buffer.concat(chunks);
+    };
+  }
+
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const method = req.method ?? "GET";
     requests.push(`${method} ${url.pathname}`);
@@ -800,6 +1038,8 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
         params: match.slice(1),
         query: url.searchParams,
         body: readJson(req),
+        raw: readRaw(req),
+        contentType: req.headers["content-type"] ?? "",
       });
       return send(res, status, body);
     }
@@ -931,6 +1171,16 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       signInPage(res, url);
       return;
     }
+    const download = /^\/__mock\/download\/([^/]+)$/.exec(url.pathname);
+    if (download) {
+      const bytes = downloads.get(download[1] ?? "");
+      res.writeHead(bytes ? 200 : 404, {
+        "content-type": "application/octet-stream",
+        "content-disposition": "attachment",
+      });
+      res.end(bytes ?? "");
+      return;
+    }
     if (/^\/api\/tasks\/[^/]+\/daemon\/http\//.test(url.pathname)) {
       relayHttp(req, res, url).catch((error: unknown) => {
         const known =
@@ -1022,6 +1272,9 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       suggestions,
       approvals,
       ...scheduled.state,
+      files: fileStore,
+      createRequests,
+      fileLinks,
     },
     addPost: scheduled.addPost,
     close: () =>

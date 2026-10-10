@@ -11,11 +11,15 @@ import type {
   CreateScheduleRequest,
   CreateTaskRequest,
   DecideRequest,
+  FileLink,
+  FileList,
+  FileView,
   MarkNoticesReadRequest,
   MarkNoticesReadResult,
   MarkPostsReadResult,
   MeView,
   ModelList,
+  MoveFileRequest,
   NoticeList,
   PersonalLayerView,
   PersonalNote,
@@ -27,6 +31,7 @@ import type {
   SchedulePreviewRequest,
   ScheduleRunNowResult,
   ScheduleView,
+  SearchResult,
   SetInstructionsRequest,
   SetLimitsRequest,
   SuggestionList,
@@ -35,13 +40,49 @@ import type {
   TaskList,
   TaskView,
   ToolsAdminView,
+  TranscriptPage,
   UpdateScheduleRequest,
   UserDetail,
   UserList,
   WakeupList,
   WakeupView,
 } from "./api-types";
+import { encodeFilePath } from "./files";
 import { errorFromResponse, isAccessRefusal, Jarvis3Error } from "./plan";
+
+/** A file's bytes for an upload (PUT /api/users/:id/files/<path>). */
+export interface UploadBody {
+  bytes: Uint8Array;
+  contentType: string;
+}
+
+/** GET /api/search: own tasks by default; `userId` (owner or admin) or `all` (admin). */
+export interface SearchQuery {
+  q: string;
+  limit?: number;
+  taskId?: string;
+  userId?: string;
+  all?: boolean;
+}
+
+/** GET /api/tasks/:id/transcript: one cursor at most (none = from the beginning). */
+export interface TranscriptQuery {
+  agentId?: string;
+  around?: number;
+  before?: number;
+  after?: number;
+  limit?: number;
+}
+
+function queryString(values: Record<string, string | number | boolean | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined || value === false || value === "") continue;
+    params.set(key, value === true ? "1" : String(value));
+  }
+  const text = params.toString();
+  return text ? `?${text}` : "";
+}
 
 export interface Jarvis3ApiDeps {
   baseUrl: () => string | null;
@@ -57,20 +98,29 @@ export interface Jarvis3ApiDeps {
 export type Jarvis3Api = ReturnType<typeof createJarvis3Api>;
 
 export function createJarvis3Api(deps: Jarvis3ApiDeps) {
-  async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    upload?: UploadBody,
+  ): Promise<T> {
     const base = deps.baseUrl();
     if (!base) throw new Jarvis3Error("This app has no instance URL.", 0, "signed_out");
     const headers: Record<string, string> = { Accept: "application/json", ...deps.authHeaders() };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     const zone = deps.timeZone?.();
     if (zone) headers["X-Time-Zone"] = zone;
+    if (upload) headers["Content-Type"] = upload.contentType || "application/octet-stream";
+    let payload: { body: string | Uint8Array } | null = null;
+    if (upload) payload = { body: upload.bytes };
+    else if (body !== undefined) payload = { body: JSON.stringify(body) };
     let response: Response;
     try {
       response = await deps.fetch(base + path, {
         method,
         headers,
         credentials: deps.credentials,
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(payload as RequestInit | null),
       });
     } catch {
       // On the web an expired Access session turns into a cross-origin redirect, which fetch
@@ -100,6 +150,7 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
 
   const id = (value: string) => encodeURIComponent(value);
   const me = "/api/users/me";
+  const filesPath = (userId: string) => `/api/users/${id(userId)}/files`;
 
   return {
     me: () => call<MeView>("GET", "/api/me"),
@@ -191,5 +242,41 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
       call<ArchiveLink>("GET", `/api/tasks/${id(taskId)}/archive?link=1`),
     setLimits: (userId: string, limits: SetLimitsRequest) =>
       call<UserDetail>("PATCH", `/api/users/${id(userId)}/limits`, limits),
+
+    /** A user's files (`me`, or another user's for an admin). */
+    listFiles: (userId = "me") => call<FileList>("GET", filesPath(userId)),
+    /** Creates or replaces the file at `path` with these bytes. */
+    uploadFile: (path: string, upload: UploadBody, userId = "me") =>
+      call<FileView>("PUT", `${filesPath(userId)}/${encodeFilePath(path)}`, undefined, upload),
+    /** A short-lived download link (always a download, never shown inline). */
+    fileLink: (path: string, userId = "me") =>
+      call<FileLink>("GET", `${filesPath(userId)}/${encodeFilePath(path)}?link=1`),
+    deleteFile: (path: string, userId = "me") =>
+      call<{ ok: true }>("DELETE", `${filesPath(userId)}/${encodeFilePath(path)}`),
+    moveFile: (from: string, to: string, userId = "me") =>
+      call<FileView>("POST", `${filesPath(userId)}/move`, { from, to } satisfies MoveFileRequest),
+
+    search: (query: SearchQuery) =>
+      call<SearchResult>(
+        "GET",
+        `/api/search${queryString({
+          q: query.q,
+          limit: query.limit,
+          taskId: query.taskId,
+          userId: query.userId,
+          all: query.all,
+        })}`,
+      ),
+    transcript: (taskId: string, query: TranscriptQuery = {}) =>
+      call<TranscriptPage>(
+        "GET",
+        `/api/tasks/${id(taskId)}/transcript${queryString({
+          agentId: query.agentId,
+          around: query.around,
+          before: query.before,
+          after: query.after,
+          limit: query.limit,
+        })}`,
+      ),
   };
 }

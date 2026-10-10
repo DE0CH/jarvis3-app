@@ -87,7 +87,7 @@ export function presentTask(task: TaskView): TaskPresentation {
   }
 }
 
-function stateLabel(state: TaskState): string {
+export function stateLabel(state: TaskState): string {
   switch (state) {
     case "starting":
       return "Starting…";
@@ -182,7 +182,7 @@ export function errorFromResponse(status: number, body: unknown): Jarvis3Error {
   const code: ErrorCode = parsed?.code ?? codeForStatus(status);
   const fallback = parsed?.message ?? `Request failed (${status}).`;
   const message = FRIENDLY[code] ?? (code === "not_found" ? "Not found." : fallback);
-  if (code === "conflict" || code === "busy" || code === "bad_request") {
+  if (code === "conflict" || code === "busy" || code === "bad_request" || code === "too_large") {
     return new Jarvis3Error(parsed?.message ? capitalise(parsed.message) : message, status, code);
   }
   return new Jarvis3Error(message, status, code);
