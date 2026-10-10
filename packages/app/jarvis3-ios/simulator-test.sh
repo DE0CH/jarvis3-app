@@ -40,9 +40,17 @@ xcrun simctl install "$UDID" "$APP"
 nohup xcrun simctl spawn "$UDID" log stream --style compact --level info \
   --predicate "subsystem CONTAINS \"com.facebook.react\" OR process CONTAINS \"Jarvis\"" > "$OUT/sim.log" 2>&1 &
 
+# A slow runner can take minutes to boot the simulator and then to start Maestro's XCTest driver
+# (default wait 2 min: "iOS driver not ready in time"), so wait longer and give the first flow a
+# second attempt; it starts from a clean install state either way.
+export MAESTRO_DRIVER_STARTUP_TIMEOUT=300000
 status=0
-maestro --device "$UDID" test --test-output-dir "$OUT/pair" -e APP_ID="$JARVIS3_BUNDLE_ID" \
-  "$HERE/maestro/pair.yaml" || status=$?
+for attempt in 1 2; do
+  status=0
+  maestro --device "$UDID" test --test-output-dir "$OUT/pair-$attempt" -e APP_ID="$JARVIS3_BUNDLE_ID" \
+    "$HERE/maestro/pair.yaml" || status=$?
+  [[ $status -eq 0 ]] && break
+done
 if [[ $status -eq 0 ]]; then
   maestro --device "$UDID" test --test-output-dir "$OUT/relaunch" -e APP_ID="$JARVIS3_BUNDLE_ID" \
     "$HERE/maestro/relaunch.yaml" || status=$?

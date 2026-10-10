@@ -83,7 +83,7 @@ jobs:
             -derivedDataPath build/sim CODE_SIGNING_ALLOWED=NO build | tail -n 40
 
       - name: Simulator test (pairing against the mock instance)
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: |
           NAME=$(cat packages/app/ios/.jarvis3-name)
           packages/app/jarvis3-ios/simulator-test.sh "packages/app/ios/build/sim/Build/Products/Release-iphonesimulator/$NAME.app"
