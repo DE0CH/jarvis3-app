@@ -13,8 +13,8 @@ npm run build:terminal-webview --workspace=@getpaseo/app
 
 cd packages/app
 npx expo prebuild --platform ios --no-install --clean
-WORKSPACE=$(cd ios && ls -d *.xcworkspace | head -1)
-NAME=${WORKSPACE%.xcworkspace}
+PROJECT=$(cd ios && ls -d *.xcodeproj | head -1) # the .xcworkspace appears only after pod install
+NAME=${PROJECT%.xcodeproj}
 PLIST="ios/$NAME/Info.plist"
 if [[ -n "${BUILD_NUMBER:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "$PLIST"
