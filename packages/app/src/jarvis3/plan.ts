@@ -6,6 +6,7 @@ import type {
   SuggestionView,
   TaskState,
   TaskView,
+  ToolsAdminView,
   UserDetail,
 } from "./api-types";
 
@@ -361,7 +362,7 @@ export function describeToolsUsage(detail: Pick<UserDetail, "tools">): string | 
   }
   if (tools.proxy) {
     parts.push(
-      `proxy ${Number(tools.proxy.usedGb.toFixed(3))} GB of ${formatLimit(tools.proxy.capGb, "gb")}${tools.proxy.override ? own : ""}`,
+      `proxy ${formatGb(tools.proxy.usedGb)} of ${formatLimit(tools.proxy.capGb, "gb")}${tools.proxy.override ? own : ""}`,
     );
   }
   const capped = [
@@ -377,6 +378,86 @@ export function describeToolsUsage(detail: Pick<UserDetail, "tools">): string | 
 /** Whether a user is at any Tier 0 cap (the "Tools at cap" pill). */
 export function toolsCapReached(detail: Pick<UserDetail, "tools">): boolean {
   return !!(detail.tools?.web?.capReached || detail.tools?.proxy?.capReached);
+}
+
+/** GB with up to 3 decimals and no trailing zeros (a few kB still shows as 0.001 or 0). */
+function formatGb(gb: number): string {
+  return `${Number(gb.toFixed(3))} GB`;
+}
+
+/** One line of the user's own "This month" card. */
+export interface UsageRow {
+  key: "model" | "machine" | "web" | "proxy";
+  label: string;
+  value: string;
+  capReached: boolean;
+}
+
+/**
+ * The user's own allowance and use this month (GET /api/me): model spend limit, machine time, and,
+ * when the instance has Tier 0 tools, web search/fetch spend and proxy traffic.
+ */
+export function myUsageRows(me: Pick<UserDetail, "limits" | "usage" | "tools">): UsageRow[] {
+  const { limits, usage, tools } = me;
+  const rows: UsageRow[] = [
+    {
+      key: "model",
+      label: "Model spend",
+      value:
+        limits.openrouterMonthlyUsd === null
+          ? "No limit"
+          : `Up to ${formatLimit(limits.openrouterMonthlyUsd, "usd")}`,
+      capReached: false,
+    },
+    {
+      key: "machine",
+      label: "Machine time",
+      value: `${usage.machineHours.toFixed(1)} h of ${formatLimit(limits.machineHoursPerMonth, "hours")}`,
+      capReached: usage.machineHoursCapReached,
+    },
+  ];
+  if (tools?.web) {
+    const calls = `${tools.web.calls} call${tools.web.calls === 1 ? "" : "s"}`;
+    rows.push({
+      key: "web",
+      label: "Web search and fetching",
+      value: `${formatSpend(tools.web.spentUsd)} of ${formatLimit(tools.web.capUsd, "usd")} (${calls})`,
+      capReached: tools.web.capReached,
+    });
+  }
+  if (tools?.proxy) {
+    rows.push({
+      key: "proxy",
+      label: "Proxy traffic",
+      value: `${formatGb(tools.proxy.usedGb)} of ${formatLimit(tools.proxy.capGb, "gb")}`,
+      capReached: tools.proxy.capReached,
+    });
+  }
+  return rows;
+}
+
+/** The instance-wide Tier 0 line on the admin's Users page (GET /api/admin/tools). */
+export function describeToolsAdmin(view: ToolsAdminView): string | null {
+  if (!view.search && !view.fetch && !view.proxy) return null;
+  const parts: string[] = [];
+  const providers = [
+    view.search ? `search ${view.search.provider}` : null,
+    view.fetch ? `fetching ${view.fetch.provider}` : null,
+    view.proxy
+      ? `proxy ${view.proxy.provider} (${view.proxy.mode === "subuser" ? "sub-accounts" : "relayed"})`
+      : null,
+  ].filter(Boolean);
+  parts.push(`Providers: ${providers.join(", ")}.`);
+  if (view.search || view.fetch) {
+    const calls = `${view.web.calls} call${view.web.calls === 1 ? "" : "s"}`;
+    parts.push(
+      `Everyone's web tools ${formatSpend(view.web.spentUsd)} of ${formatLimit(view.web.capUsd, "usd")} (${calls}) in ${view.month}.`,
+    );
+  }
+  if (view.proxy) parts.push(`Proxy traffic ${formatGb(view.proxyUsedGb)}.`);
+  if (view.web.capReached)
+    parts.push("Instance cap reached: web tools stopped for everyone until next month.");
+  return parts.join(" ");
 }
 
 /** The admin's one-line summary of a user's model spend and machine time this month. */

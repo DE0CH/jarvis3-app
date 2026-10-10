@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { StyleSheet } from "react-native-unistyles";
-import { SettingsCard } from "@/components/settings";
+import { SettingsCard, SettingsRow, SettingsSection } from "@/components/settings";
 import { Button } from "@/components/ui/button";
 import type { TaskView } from "../api-types";
 import { tasksStore } from "../client";
-import { useTasks } from "../hooks";
-import { orderTasks, presentTask } from "../plan";
+import { useAccount, useTasks } from "../hooks";
+import { myUsageRows, orderTasks, presentTask } from "../plan";
 import { pruneTaskHosts } from "../task-host";
 import { Banner, CenteredDialog, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
 
@@ -69,6 +69,7 @@ export function TaskListScreen() {
         pending={tasks.pending}
         onDelete={setDeleting}
       />
+      <MyUsage />
       <CenteredDialog
         visible={deleting !== null}
         title="Delete this task?"
@@ -193,6 +194,29 @@ function TaskRow({
         ) : null}
       </View>
     </View>
+  );
+}
+
+/** The user's own allowance and use this month (GET /api/me, refreshed with the account). */
+function MyUsage() {
+  const account = useAccount();
+  const me = account.me;
+  if (!me) return null;
+  return (
+    <SettingsSection title={`This month (${me.usage.month})`}>
+      <SettingsCard testID="jarvis3-my-usage">
+        {myUsageRows(me).map((row) => (
+          <SettingsRow
+            key={row.key}
+            label={row.label}
+            hint={row.value}
+            testID={`jarvis3-my-usage-${row.key}`}
+          >
+            {row.capReached ? <StatusPill tone="error" label="At cap" /> : null}
+          </SettingsRow>
+        ))}
+      </SettingsCard>
+    </SettingsSection>
   );
 }
 

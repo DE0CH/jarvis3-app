@@ -37,6 +37,7 @@ import type {
   SuggestionView,
   SuggestRequest,
   TaskView,
+  ToolsAdminView,
   UserDetail,
   UserStatus,
 } from "../src/jarvis3/api-types";
@@ -193,7 +194,10 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   const meOf = (user: MockUser): MeView => ({
     ...detailOf(user),
     unreadNotices: noticesOf(user.id).filter((notice) => !notice.read).length,
-    features: { suggestions: true },
+    features: {
+      suggestions: true,
+      ...(options.tools ? { tools: { search: true, fetch: true, proxy: true } } : {}),
+    },
     pendingApprovals: approvals.filter((a) => canDecide(user, a)).length,
     isOwner: user.id === ownerId,
   });
@@ -667,6 +671,23 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       ({ user, params }) => [200, detailOf(userFor(user, params[0] ?? ""))],
     ],
     ["PATCH", new RegExp(`^/api/users/${ID}/limits$`), setLimits],
+    [
+      "GET",
+      /^\/api\/admin\/tools$/,
+      ({ user }) => {
+        requireAdmin(user);
+        if (!options.tools) throw new HttpError(409, "conflict", "no Tier 0 tools");
+        const view: ToolsAdminView = {
+          month: "2026-10",
+          search: { provider: "exa" },
+          fetch: { provider: "scrapingbee" },
+          proxy: { provider: "evomi", mode: "relay" },
+          web: { spentUsd: 5.0147, calls: 715, capUsd: 100, capReached: false },
+          proxyUsedGb: 0.25,
+        };
+        return [200, view];
+      },
+    ],
     ["GET", new RegExp(`^/api/users/${ID}/layer$`), (ctx) => [200, layerFor(ctx).view()]],
     [
       "PUT",

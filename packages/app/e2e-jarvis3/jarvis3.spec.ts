@@ -167,6 +167,16 @@ test("lists only the user's own tasks, with state and Start for a paused one", a
   // Paseo's own chrome stays out of this variant.
   await expect(page.getByText("Add host")).toHaveCount(0);
   await shoot(page, "task-list");
+
+  // the user's own allowance and use this month, Tier 0 tools included
+  await expect(page.getByTestId("jarvis3-my-usage-machine")).toBeVisible();
+  await expect(page.getByTestId("jarvis3-my-usage-web")).toContainText(
+    "USD 0.0147 of USD 5.00 (3 calls)",
+  );
+  await expect(page.getByTestId("jarvis3-my-usage-proxy")).toContainText("0.25 GB of 1 GB");
+  await shoot(page, "my-usage", () =>
+    page.getByTestId("jarvis3-my-usage").scrollIntoViewIfNeeded(),
+  );
 });
 
 test("opens a task's chat through the instance's daemon proxy", async ({ page }) => {
@@ -316,6 +326,12 @@ test("an admin sees users and their limits", async ({ page, context }) => {
     "Web tools USD 0.0147 of USD 5.00 (3 calls); proxy 0.25 GB of 1 GB",
   );
   await expect(page.getByTestId("jarvis3-user-tools-cap-u-bob")).toContainText("Tools at cap");
+  await expect(page.getByTestId("jarvis3-tools-admin")).toContainText(
+    "Providers: search exa, fetching scrapingbee, proxy evomi (relayed).",
+  );
+  await expect(page.getByTestId("jarvis3-tools-admin")).toContainText(
+    "Everyone's web tools USD 5.01 of USD 100.00 (715 calls)",
+  );
   await shoot(page, "admin-users");
 
   // raise Bob's web-tools cap: the pill goes, the row says it is set for him

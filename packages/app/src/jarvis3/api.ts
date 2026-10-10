@@ -24,6 +24,7 @@ import type {
   SuggestRequest,
   TaskList,
   TaskView,
+  ToolsAdminView,
   UserDetail,
   UserList,
 } from "./api-types";
@@ -140,6 +141,8 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
       call<ApprovalView>("POST", `/api/approvals/${id(approvalId)}/decide`, request),
 
     listUsers: () => call<UserList>("GET", "/api/users"),
+    /** Admin: the instance's Tier 0 providers and this month's totals. */
+    toolsAdmin: () => call<ToolsAdminView>("GET", "/api/admin/tools"),
     /** Admin: a user's tasks, archived ones included (an offboarded person's sessions). */
     listUserTasks: (userId: string) => call<TaskList>("GET", `/api/tasks?userId=${id(userId)}`),
     /** Admin: a user's personal layer (kept after offboarding). */

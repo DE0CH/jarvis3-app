@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { SuggestionView, TaskView } from "./api-types";
+import type { SuggestionView, TaskView, UserDetail } from "./api-types";
 import {
   canDownloadArchive,
   canUndoLayer,
+  describeToolsAdmin,
   describeToolsUsage,
+  myUsageRows,
   describeUsage,
   openSuggestionFor,
   presentSuggestion,
@@ -334,6 +336,71 @@ describe("admin tools summary", () => {
     expect(toolsCapReached({ tools: capped })).toBe(true);
     expect(describeToolsUsage({ tools: { ...tools, proxy: null } })).toBe(
       "Web tools USD 0.0147 of USD 5.00 (3 calls).",
+    );
+  });
+});
+
+describe("my usage this month", () => {
+  const me: Pick<UserDetail, "limits" | "usage"> = {
+    limits: {
+      openrouterMonthlyUsd: 50,
+      openrouterOverride: false,
+      machineHoursPerMonth: 40,
+      machineHoursOverride: false,
+    },
+    usage: {
+      month: "2026-10",
+      machineHours: 3.25,
+      machineHoursCapReached: false,
+      openrouterKey: true,
+    },
+  };
+  it("shows model and machine time without Tier 0 tools", () => {
+    expect(myUsageRows(me).map((r) => [r.label, r.value, r.capReached])).toEqual([
+      ["Model spend", "Up to USD 50.00", false],
+      ["Machine time", "3.3 h of 40 h", false],
+    ]);
+  });
+  it("adds web tools and proxy traffic with their caps", () => {
+    const rows = myUsageRows({
+      ...me,
+      tools: {
+        month: "2026-10",
+        web: { capUsd: 5, override: false, spentUsd: 5, calls: 1, capReached: true },
+        proxy: {
+          mode: "subuser",
+          capGb: null,
+          override: false,
+          usedGb: 0.0000042,
+          capReached: false,
+        },
+      },
+    });
+    expect(rows.slice(2).map((r) => [r.key, r.value, r.capReached])).toEqual([
+      ["web", "USD 5.00 of USD 5.00 (1 call)", true],
+      ["proxy", "0 GB of No limit", false],
+    ]);
+  });
+});
+
+describe("admin instance tools line", () => {
+  const view = {
+    month: "2026-10",
+    search: { provider: "exa" },
+    fetch: { provider: "scrapingbee" },
+    proxy: { provider: "evomi", mode: "relay" as const },
+    web: { spentUsd: 0.25, calls: 40, capUsd: 100, capReached: false },
+    proxyUsedGb: 1.25,
+  };
+  it("is null when nothing is configured", () => {
+    expect(describeToolsAdmin({ ...view, search: null, fetch: null, proxy: null })).toBeNull();
+  });
+  it("names the providers and the instance's totals", () => {
+    expect(describeToolsAdmin(view)).toBe(
+      "Providers: search exa, fetching scrapingbee, proxy evomi (relayed). Everyone's web tools USD 0.2500 of USD 100.00 (40 calls) in 2026-10. Proxy traffic 1.25 GB.",
+    );
+    expect(describeToolsAdmin({ ...view, web: { ...view.web, capReached: true } })).toMatch(
+      /Instance cap reached/,
     );
   });
 });

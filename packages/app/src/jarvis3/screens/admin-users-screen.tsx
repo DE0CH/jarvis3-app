@@ -8,11 +8,18 @@ import { StyleSheet } from "react-native-unistyles";
 import { SettingsCard, SettingsInput, SettingsRow, SettingsSection } from "@/components/settings";
 import { Button } from "@/components/ui/button";
 import { openExternalUrl } from "@/utils/open-external-url";
-import type { PersonalLayerView, SetLimitsRequest, TaskView, UserDetail } from "../api-types";
+import type {
+  PersonalLayerView,
+  SetLimitsRequest,
+  TaskView,
+  ToolsAdminView,
+  UserDetail,
+} from "../api-types";
 import { jarvis3Api } from "../client";
 import { useAccount } from "../hooks";
 import {
   canDownloadArchive,
+  describeToolsAdmin,
   describeToolsUsage,
   describeUsage,
   parseLimitInput,
@@ -30,6 +37,8 @@ export function AdminUsersScreen() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [details, setDetails] = useState<string | null>(null);
+  const toolsOn = hasTools(account.me?.features?.tools);
+  const [toolsView, setToolsView] = useState<ToolsAdminView | null>(null);
   const suggestions = useSuggestions(isAdmin && account.me?.features?.suggestions === true, {
     all: true,
   });
@@ -51,6 +60,19 @@ export function AdminUsersScreen() {
     void run();
   }, [isAdmin]);
 
+  useEffect(() => {
+    if (!isAdmin || !toolsOn) return;
+    const run = async () => {
+      try {
+        setToolsView(await jarvis3Api.toolsAdmin());
+      } catch (e) {
+        setError(messageOf(e));
+      }
+    };
+    void run();
+  }, [isAdmin, toolsOn]);
+  const toolsLine = toolsView ? describeToolsAdmin(toolsView) : null;
+
   const done = useCallback((updated: UserDetail | null) => {
     setEditing(null);
     if (!updated) return;
@@ -71,6 +93,15 @@ export function AdminUsersScreen() {
   return (
     <Jarvis3Frame title="Users" testID="jarvis3-admin-users">
       {error ? <Banner tone="error">{error}</Banner> : null}
+      {toolsLine && toolsView ? (
+        <SettingsCard testID="jarvis3-tools-admin">
+          <SettingsRow label="Web tools and proxies" hint={toolsLine}>
+            {toolsView.web.capReached ? (
+              <StatusPill tone="error" label="Instance at cap" testID="jarvis3-tools-admin-cap" />
+            ) : null}
+          </SettingsRow>
+        </SettingsCard>
+      ) : null}
       {users ? (
         <SettingsCard testID="jarvis3-users">
           {users.map((detail) => (
@@ -95,6 +126,10 @@ export function AdminUsersScreen() {
       ) : null}
     </Jarvis3Frame>
   );
+}
+
+function hasTools(tools: { search: boolean; fetch: boolean; proxy: boolean } | undefined) {
+  return !!(tools && (tools.search || tools.fetch || tools.proxy));
 }
 
 function userLabel(detail: UserDetail): string {
