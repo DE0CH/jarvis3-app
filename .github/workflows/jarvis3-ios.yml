@@ -88,8 +88,6 @@ jobs:
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build/sim CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO build | tail -n 40
           codesign -d --entitlements - "build/sim/Build/Products/Release-iphonesimulator/$NAME.app" 2>&1 | head -n 40
-          # push: the app must carry aps-environment (expo-notifications, mode production)
-          ../jarvis3-ios/check-push-entitlement.sh "build/sim/Build/Products/Release-iphonesimulator/$NAME.app" production
 
       - name: Simulator test (pairing against the mock instance)
         timeout-minutes: 45
@@ -155,6 +153,16 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=S64YL394S3 \
             2>&1 | tee "$RUNNER_TEMP/archive.log" | grep -E "error:|\*\* " || true
           grep -q "ARCHIVE SUCCEEDED" "$RUNNER_TEMP/archive.log"
+          # An unsigned app asks for no entitlements, and the export only keeps what the app asks for:
+          # without this the distribution signature lacks aps-environment (no APNs token on devices).
+          # An ad-hoc signature with the app's entitlements file carries the request; the export
+          # re-signs with the distribution certificate. No certificate is involved here.
+          APP=$(ls -d "$RUNNER_TEMP/app.xcarchive/Products/Applications/"*.app | head -1)
+          # nested code first (no entitlements), then the app itself
+          find "$APP" -mindepth 1 \( -name "*.framework" -o -name "*.dylib" -o -name "*.appex" \) -prune \
+            -exec codesign --force --sign - --timestamp=none {} \;
+          codesign --force --timestamp=none --sign - --entitlements "$NAME/$NAME.entitlements" --generate-entitlement-der "$APP"
+          codesign -d --entitlements - "$APP" 2>&1 | grep -A1 aps-environment
 
       - name: Check the signed app has the push entitlement
         # A separate export to an .ipa (cloud-signed the same way as the upload below): the

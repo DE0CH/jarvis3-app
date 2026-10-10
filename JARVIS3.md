@@ -195,8 +195,8 @@ run in parallel on GitHub `macos-26` runners, 40 to 60 min each:
   Sign in, the system sign-in sheet, the mock's sign-in page (standing in for Cloudflare Access),
   the `jarvis3://paired` redirect, the task list loaded with the device token, a relaunch that
   stays paired, and Notifications > Turn on > Allow (`push.yaml`); the log says whether iOS gave the
-  simulator an APNs token (the mock logs each registration). The build must carry
-  `aps-environment` (`check-push-entitlement.sh`). Screenshots go to the `jarvis3-ios-simulator` artifact; they hold mock data only.
+  simulator an APNs token (the mock logs each registration). `prepare.sh` fails unless the
+  generated entitlements ask for `aps-environment = production`. Screenshots go to the `jarvis3-ios-simulator` artifact; they hold mock data only.
 - **testflight**: builds with the instance's URL, archives unsigned, then `-exportArchive` with
   `-allowProvisioningUpdates` and the App Store Connect API key signs the app with Apple's
   cloud-managed distribution certificate and uploads it (no certificates or profiles anywhere).
@@ -242,6 +242,12 @@ Pitfalls:
   driver past its 5-minute start window ("iOS driver not ready in time").
 - `APP_VARIANT=jarvis3` must be set for every step. Xcode's "Bundle React Native code" phase
   re-reads `app.config.js`; without it the app embeds upstream's config.
+- The unsigned archive asks for no entitlements, and `-exportArchive` keeps only what the app asks
+  for, so the TestFlight build had no `aps-environment` (iOS then gives it no APNs token). The job
+  ad-hoc signs the archived app with its entitlements file before exporting; the export re-signs it
+  with the distribution certificate and keeps the request. A simulator build's
+  `codesign -d --entitlements` is empty whatever the app asks for (simulated entitlements live in
+  the binary), so check the entitlements file there.
 - Build with Xcode 26. An app linked against the iOS 27 SDK must adopt the UIScene life cycle, and
   Expo SDK 54's template doesn't.
 - Expo names the Xcode project after the app name (`Jarvis 3` -> `Jarvis3`); `prepare.sh` writes it

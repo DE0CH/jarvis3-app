@@ -21,6 +21,15 @@ if [[ -n "${BUILD_NUMBER:-}" ]]; then
 fi
 echo "bundle id: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST" 2>/dev/null || true) (project $NAME)"
 /usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes' "$PLIST" | grep -E '^\s+[a-z0-9.-]+$' | sed 's/^ */url scheme: /'
+# push notifications: the app's entitlements must ask for aps-environment = production
+# (expo-notifications, mode production in app.config.js), or iOS gives it no APNs token
+ENTITLEMENTS="ios/$NAME/$NAME.entitlements"
+APS=$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$ENTITLEMENTS" 2>/dev/null || true)
+if [[ "$APS" != "production" ]]; then
+  echo "::error::$ENTITLEMENTS has aps-environment '${APS:-missing}', expected 'production'"
+  exit 1
+fi
+echo "aps-environment: $APS ($ENTITLEMENTS)"
 echo "NODE_BINARY=$(command -v node)" > ios/.xcode.env.local
 (cd ios && pod install)
 echo "$NAME" > ios/.jarvis3-name
