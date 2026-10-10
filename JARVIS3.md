@@ -216,6 +216,9 @@ Pitfalls:
   unsigned app has no entitlements, so the simulator keychain refuses expo-secure-store's write of
   the device token ("A required entitlement isn't present") and pairing fails right after the mock
   sign-in, which looks like a flaky Maestro assertion.
+- Boot the simulator at the start of the job (`simulator-test.sh --boot`). A fresh simulator's first
+  boot takes 2-6 minutes of runner CPU; started right before Maestro, it starves Maestro's XCTest
+  driver past its 5-minute start window ("iOS driver not ready in time").
 - `APP_VARIANT=jarvis3` must be set for every step. Xcode's "Bundle React Native code" phase
   re-reads `app.config.js`; without it the app embeds upstream's config.
 - Build with Xcode 26. An app linked against the iOS 27 SDK must adopt the UIScene life cycle, and

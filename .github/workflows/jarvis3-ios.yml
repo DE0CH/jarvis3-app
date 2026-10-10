@@ -62,6 +62,9 @@ jobs:
           sudo xcode-select -s "$XCODE"
           xcodebuild -version
 
+      - name: Boot the simulator (it settles while the app builds)
+        run: packages/app/jarvis3-ios/simulator-test.sh --boot
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
