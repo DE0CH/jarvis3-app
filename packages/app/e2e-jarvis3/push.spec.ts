@@ -47,8 +47,8 @@ async function signIn(context: BrowserContext, email: string): Promise<void> {
 }
 
 /**
- * A browser without a push service: PushManager.subscribe answers a fixed subscription, and the
- * permission prompt answers "granted" (Playwright grants the permission itself).
+ * A browser without a push service: PushManager.subscribe answers a fixed subscription, and
+ * notifications are allowed (Notification.permission and its prompt answer "granted").
  */
 async function stubPushService(context: BrowserContext): Promise<void> {
   await context.grantPermissions(["notifications"], { origin: instance.url });
@@ -70,6 +70,13 @@ async function stubPushService(context: BrowserContext): Promise<void> {
         return true;
       },
     };
+    // headless Chromium reports notifications as denied whatever was granted
+    const N = (globalThis as unknown as { Notification?: { requestPermission: unknown } })
+      .Notification;
+    if (N) {
+      Object.defineProperty(N, "permission", { get: () => "granted", configurable: true });
+      N.requestPermission = async () => "granted";
+    }
     const proto = (
       globalThis as unknown as { PushManager?: { prototype: Record<string, unknown> } }
     ).PushManager?.prototype;
