@@ -10,7 +10,9 @@ import type {
 } from "./api-types";
 import { Jarvis3Error } from "./plan";
 import {
+  channelRecordHint,
   checkScheduleForm,
+  checkWakeForm,
   createSchedulesStore,
   createTaskExtrasStore,
   cronOfRepeat,
@@ -19,6 +21,7 @@ import {
   describeWakeupWhen,
   noticeTarget,
   openScheduleForm,
+  openWakeForm,
   repeatOfCron,
   runResultLabel,
   scheduleStatus,
@@ -421,6 +424,7 @@ describe("the channels and wakeups store", () => {
       markPostsRead: async () => ({ unreadPosts: 0 }),
       listWakeups: async () => ({ wakeups: [wakeup()] }),
       cancelWakeup: async () => wakeup({ state: "cancelled" }),
+      armWakeup: async () => wakeup({ setBy: "owner", name: "app-1a2b3c" }),
       ...overrides,
     };
     const store = createTaskExtrasStore(api, {
@@ -542,5 +546,88 @@ describe("the API client", () => {
     const first = calls[0];
     if (!first) throw new Error("no call");
     expect((first[1].headers as Record<string, string>)["X-Time-Zone"]).toBe("Europe/London");
+  });
+});
+
+describe("the admin's channel rows", () => {
+  it("says unread by them on someone else's row, just unread on one's own", () => {
+    expect(channelRecordHint(channel({ posts: 2, unread: 1, userId: "u2" }), "u1")).toBe(
+      "2 posts, 1 unread by them",
+    );
+    expect(channelRecordHint(channel({ posts: 2, unread: 1, userId: "u1" }), "u1")).toBe(
+      "2 posts, 1 unread",
+    );
+    expect(channelRecordHint(channel({ posts: 1, unread: 0, userId: "u2" }), "u1")).toBe("1 post");
+  });
+});
+
+describe("Wake this task at…", () => {
+  const now = new Date(2026, 9, 10, 16, 20, 0);
+
+  it("opens on the next full hour, tomorrow when that crosses midnight", () => {
+    expect(openWakeForm(now)).toEqual({ date: "2026-10-10", time: "17:00", message: "" });
+    expect(openWakeForm(new Date(2026, 9, 10, 23, 30))).toMatchObject({
+      date: "2026-10-11",
+      time: "00:00",
+    });
+  });
+
+  it("turns the device's date and time into the request, the message only when given", () => {
+    const ok = checkWakeForm({ date: "2026-10-12", time: "9:05", message: "" }, now);
+    if (!("request" in ok)) throw new Error(ok.error);
+    expect(ok.request).toEqual({ at: new Date(2026, 9, 12, 9, 5).toISOString() });
+    const withMessage = checkWakeForm(
+      { date: "2026-10-12", time: "09:05", message: "  Send me the draft " },
+      now,
+    );
+    expect("request" in withMessage && withMessage.request.prompt).toBe("Send me the draft");
+  });
+
+  it("refuses what the server would refuse, in words", () => {
+    const error = (date: string, time: string, message = "") => {
+      const r = checkWakeForm({ date, time, message }, now);
+      return "error" in r ? r.error : null;
+    };
+    expect(error("12/10/2026", "09:00")).toMatch(/YYYY-MM-DD/);
+    expect(error("2026-10-12", "9am")).toMatch(/HH:MM/);
+    expect(error("2026-02-30", "09:00")).toMatch(/doesn't exist/);
+    expect(error("2026-10-10", "16:20")).toMatch(/passed/);
+    expect(error("2027-10-11", "09:00")).toMatch(/a year ahead/);
+    expect(error("2026-10-12", "09:00", "x".repeat(4001))).toMatch(/4000 characters/);
+  });
+
+  it("the store arms it, then reloads the task's wakeups; a refusal comes back as its message", async () => {
+    const armed: unknown[] = [];
+    let listed = 0;
+    const store = createTaskExtrasStore(
+      {
+        listChannels: async () => ({ channels: [] }),
+        listPosts: async () => ({ posts: [] }),
+        markPostsRead: async () => ({ unreadPosts: 0 }),
+        listWakeups: async () => {
+          listed += 1;
+          return { wakeups: [wakeup({ setBy: "owner" })] };
+        },
+        cancelWakeup: async () => wakeup(),
+        armWakeup: async (taskId, request) => {
+          armed.push([taskId, request]);
+          if (request.prompt === "too many") {
+            throw new Jarvis3Error(
+              "A task may have at most 10 armed wakeups.",
+              429,
+              "too_many_requests",
+            );
+          }
+          return wakeup({ setBy: "owner" });
+        },
+      },
+      { setUnreadPosts: () => undefined, refreshMe: async () => undefined },
+    );
+    expect(await store.armWakeup("t1", { at: "2026-10-12T08:00:00.000Z" })).toBeNull();
+    expect(armed).toEqual([["t1", { at: "2026-10-12T08:00:00.000Z" }]]);
+    expect(listed).toBe(1);
+    expect(store.get().wakeups.t1?.wakeups[0]?.setBy).toBe("owner");
+    expect(await store.armWakeup("t1", { at: "x", prompt: "too many" })).toMatch(/at most 10/);
+    expect(listed).toBe(1);
   });
 });

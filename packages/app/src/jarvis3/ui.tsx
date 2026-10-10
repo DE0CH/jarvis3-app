@@ -221,6 +221,8 @@ export function CenteredDialog({
   onConfirm,
   onCancel,
   testID,
+  confirmDisabled,
+  children,
 }: {
   visible: boolean;
   title: string;
@@ -232,6 +234,9 @@ export function CenteredDialog({
   onConfirm: () => void;
   onCancel: () => void;
   testID?: string;
+  confirmDisabled?: boolean;
+  /** A form or a list between the message and the buttons. */
+  children?: ReactNode;
 }) {
   const stop = useCallback(() => undefined, []);
   return (
@@ -242,6 +247,7 @@ export function CenteredDialog({
             {title}
           </Text>
           <Text style={styles.dialogMessage}>{message}</Text>
+          {children}
           <View style={styles.dialogButtons}>
             <Button
               variant="ghost"
@@ -255,6 +261,7 @@ export function CenteredDialog({
               variant={destructive ? "destructive" : "default"}
               size="sm"
               loading={busy}
+              disabled={confirmDisabled}
               onPress={onConfirm}
               testID={testID ? `${testID}-confirm` : undefined}
             >

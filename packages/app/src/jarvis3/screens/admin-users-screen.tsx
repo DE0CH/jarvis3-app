@@ -32,6 +32,7 @@ import { messageOf } from "../stores";
 import { Banner, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
 import { SuggestionsCard, useSuggestions } from "./suggestions";
 import { countOf } from "../count";
+import { channelRecordHint } from "../schedules";
 
 export function AdminUsersScreen() {
   const account = useAccount();
@@ -296,19 +297,19 @@ function layerSummary(layer: PersonalLayerView): string {
 
 /** A task's channel, opened read-only (an admin's reading leaves the owner's posts unread). */
 function ChannelRecord({ channel }: { channel: ChannelView }) {
+  const viewerId = useAccount().me?.user.id ?? null;
   const router = useRouter();
   const open = useCallback(
     () => router.push(`/channels/${encodeURIComponent(channel.taskId)}` as Href),
     [router, channel.taskId],
   );
-  const unread = channel.unread > 0 ? `, ${channel.unread} unread by them` : "";
   return (
     <View style={styles.taskRow}>
       <View style={styles.taskText}>
         <Text style={styles.body} numberOfLines={1}>
           {channel.taskTitle}
         </Text>
-        <Text style={styles.hint}>{`${countOf(channel.posts, "post")}${unread}`}</Text>
+        <Text style={styles.hint}>{channelRecordHint(channel, viewerId)}</Text>
       </View>
       <Button
         variant="ghost"

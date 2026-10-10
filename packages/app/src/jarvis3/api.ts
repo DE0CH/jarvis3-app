@@ -3,6 +3,7 @@
 // with a fake fetch (api.test.ts) and used with the real one in client.ts.
 import type {
   AddNoteRequest,
+  ArmWakeupRequest,
   ArchiveLink,
   ApprovalList,
   ApprovalView,
@@ -50,11 +51,40 @@ import type {
 import { encodeFilePath } from "./files";
 import { errorFromResponse, isAccessRefusal, Jarvis3Error } from "./plan";
 
-/** A file's bytes for an upload (PUT /api/users/:id/files/<path>). */
+/**
+ * What an upload sends (PUT /api/users/:id/files/<path>), never read into memory whole when it can
+ * be streamed: the web's picked `File` (the browser streams a Blob body from disk), a file on the
+ * device (iOS: uploaded from disk by the native uploader), or bytes already in memory.
+ */
+export type UploadSource =
+  | { kind: "blob"; blob: Blob }
+  | { kind: "file"; uri: string; size: number }
+  | { kind: "bytes"; bytes: Uint8Array };
+
 export interface UploadBody {
-  bytes: Uint8Array;
+  source: UploadSource;
   contentType: string;
 }
+
+export function uploadSize(source: UploadSource): number {
+  if (source.kind === "blob") return source.blob.size;
+  if (source.kind === "file") return source.size;
+  return source.bytes.byteLength;
+}
+
+/** The answer of a native file upload, enough to read it like a fetch Response. */
+export interface FileUploadResult {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+}
+
+/** iOS: PUT a file from disk with these headers, streamed by the platform (not read into JS). */
+export type FileUploader = (
+  url: string,
+  uri: string,
+  headers: Record<string, string>,
+) => Promise<FileUploadResult>;
 
 /** GET /api/search: own tasks by default; `userId` (owner or admin) or `all` (admin). */
 export interface SearchQuery {
@@ -93,11 +123,54 @@ export interface Jarvis3ApiDeps {
   fetch: typeof fetch;
   /** The device's IANA time zone, sent as `X-Time-Zone` (schedules and wakeups use it). */
   timeZone?: () => string | null;
+  /** Native only: uploads a `file` source from disk. Without it a `file` source is refused. */
+  uploadFromFile?: FileUploader | null;
+}
+
+/** A native upload's answer as a Response, so it goes through the same checks as fetch's. */
+function uploadResponse(result: FileUploadResult): Response {
+  const empty = result.status === 204 || result.status === 304;
+  return new Response(empty ? null : result.body, {
+    status: result.status,
+    headers: result.headers,
+  });
 }
 
 export type Jarvis3Api = ReturnType<typeof createJarvis3Api>;
 
+/** The fetch body of a request: an upload's Blob or bytes, or JSON (a `file` upload has none). */
+function requestPayload(body: unknown, upload: UploadBody | undefined): RequestInit | null {
+  if (upload?.source.kind === "blob") return { body: upload.source.blob };
+  if (upload?.source.kind === "bytes")
+    return { body: upload.source.bytes as Uint8Array<ArrayBuffer> };
+  if (upload) return null;
+  if (body !== undefined) return { body: JSON.stringify(body) };
+  return null;
+}
+
 export function createJarvis3Api(deps: Jarvis3ApiDeps) {
+  /** Sends the request: a `file` upload through the native uploader, everything else by fetch. */
+  async function send(
+    url: string,
+    method: string,
+    headers: Record<string, string>,
+    body: unknown,
+    upload: UploadBody | undefined,
+  ): Promise<Response> {
+    if (upload?.source.kind === "file") {
+      if (!deps.uploadFromFile) {
+        throw new Jarvis3Error("This device can't upload files from disk.", 0, "network");
+      }
+      return uploadResponse(await deps.uploadFromFile(url, upload.source.uri, headers));
+    }
+    return deps.fetch(url, {
+      method,
+      headers,
+      credentials: deps.credentials,
+      ...requestPayload(body, upload),
+    });
+  }
+
   async function call<T>(
     method: string,
     path: string,
@@ -111,17 +184,12 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
     const zone = deps.timeZone?.();
     if (zone) headers["X-Time-Zone"] = zone;
     if (upload) headers["Content-Type"] = upload.contentType || "application/octet-stream";
-    let payload: { body: string | Uint8Array } | null = null;
-    if (upload) payload = { body: upload.bytes };
-    else if (body !== undefined) payload = { body: JSON.stringify(body) };
+    if (upload?.source.kind === "file" && !deps.uploadFromFile) {
+      throw new Jarvis3Error("This device can't upload files from disk.", 0, "network");
+    }
     let response: Response;
     try {
-      response = await deps.fetch(base + path, {
-        method,
-        headers,
-        credentials: deps.credentials,
-        ...(payload as RequestInit | null),
-      });
+      response = await send(base + path, method, headers, body, upload);
     } catch {
       // On the web an expired Access session turns into a cross-origin redirect, which fetch
       // reports as a network error.
@@ -224,6 +292,9 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
       call<SchedulePreview>("POST", "/api/schedules/preview", request),
     listWakeups: (taskId: string) => call<WakeupList>("GET", `/api/wakeups?taskId=${id(taskId)}`),
     cancelWakeup: (wakeupId: string) => call<WakeupView>("DELETE", `/api/wakeups/${id(wakeupId)}`),
+    /** The owner wakes their task once at a time (POST /api/tasks/:id/wakeups). */
+    armWakeup: (taskId: string, request: ArmWakeupRequest) =>
+      call<WakeupView>("POST", `/api/tasks/${id(taskId)}/wakeups`, request),
     /** The caller's channels, or (an admin) another user's. */
     listChannels: (userId?: string) =>
       call<ChannelList>("GET", userId ? `/api/channels?userId=${id(userId)}` : "/api/channels"),
@@ -247,7 +318,7 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
 
     /** A user's files (`me`, or another user's for an admin). */
     listFiles: (userId = "me") => call<FileList>("GET", filesPath(userId)),
-    /** Creates or replaces the file at `path` with these bytes. */
+    /** Creates or replaces the file at `path` with the upload's content (streamed when it can be). */
     uploadFile: (path: string, upload: UploadBody, userId = "me") =>
       call<FileView>("PUT", `${filesPath(userId)}/${encodeFilePath(path)}`, undefined, upload),
     /** A short-lived download link (always a download, never shown inline). */

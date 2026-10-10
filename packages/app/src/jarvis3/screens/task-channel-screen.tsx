@@ -1,7 +1,8 @@
 // A task's channel and wakeups: what the task's agent posted for its owner (reports, the result of
 // a scheduled run), newest first, and the wakeups it armed, with Cancel. Opening it marks the posts
 // read for the task's owner. An admin opening someone else's channel (from the Users page) gets it
-// read-only: no Cancel, no Open chat, and nothing is marked read.
+// read-only: no Cancel, no Open chat, no Wake, and nothing is marked read. The owner can also
+// wake the task at a time ("Wake this task at…", POST /api/tasks/:id/wakeups).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { useRouter, type Href } from "expo-router";
@@ -9,13 +10,28 @@ import { StyleSheet } from "react-native-unistyles";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { SettingsCard, SettingsRow, SettingsSection } from "@/components/settings";
 import { Button } from "@/components/ui/button";
+import { FormTextInput } from "@/components/ui/form-field";
 import type { ChannelPostView, TaskView, WakeupView } from "../api-types";
 import { jarvis3Api, taskExtrasStore } from "../client";
 import { useAccount, useTaskExtras } from "../hooks";
-import { describeWakeupWhen, wakeupStateLabel, wakeupsOrdered } from "../schedules";
+import {
+  checkWakeForm,
+  describeWakeupWhen,
+  deviceTimeZone,
+  openWakeForm,
+  type WakeForm,
+  wakeupStateLabel,
+  wakeupsOrdered,
+} from "../schedules";
 import { messageOf } from "../stores";
 import { Banner, CenteredDialog, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
 import { formatWhen } from "./format";
+
+/** The owner may wake a task that hasn't ended. */
+function wakeable(task: TaskView | null, readOnly: boolean): boolean {
+  if (task === null || readOnly) return false;
+  return task.state !== "archived" && task.state !== "destroying" && task.state !== "failed";
+}
 
 export function TaskChannelScreen({ taskId }: { taskId: string }) {
   const router = useRouter();
@@ -25,6 +41,7 @@ export function TaskChannelScreen({ taskId }: { taskId: string }) {
   const [task, setTask] = useState<TaskView | null>(null);
   const [taskError, setTaskError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<WakeupView | null>(null);
+  const [waking, setWaking] = useState(false);
   const myId = useAccount().me?.user.id ?? null;
   // Someone else's task: an admin reading it from the Users page.
   const readOnly = task !== null && task.userId !== myId;
@@ -58,6 +75,9 @@ export function TaskChannelScreen({ taskId }: { taskId: string }) {
     [canOpenChat, openChat],
   );
   const closeDialog = useCallback(() => setCancelling(null), []);
+  const openWake = useCallback(() => setWaking(true), []);
+  const closeWake = useCallback(() => setWaking(false), []);
+  const canWake = wakeable(task, readOnly);
 
   if (taskError && !posts?.posts.length) {
     return (
@@ -84,11 +104,13 @@ export function TaskChannelScreen({ taskId }: { taskId: string }) {
         cancelling={extras.cancelling}
         cancelErrors={extras.cancelErrors}
         onCancel={setCancelling}
+        onWake={canWake ? openWake : null}
       />
       <SettingsSection title="Posts">
         {posts?.error ? <Banner tone="error">{posts.error}</Banner> : null}
         <PostsBody loaded={posts?.loaded ?? false} posts={posts?.posts ?? []} />
       </SettingsSection>
+      <WakeDialog taskId={taskId} visible={waking} onClose={closeWake} />
       <CancelWakeupDialog
         wakeup={cancelling}
         busy={cancelling ? extras.cancelling[cancelling.id] === true : false}
@@ -128,6 +150,103 @@ function CancelWakeupDialog({
       onConfirm={confirm}
       testID="jarvis3-wakeup-cancel-dialog"
     />
+  );
+}
+
+/** "Wake this task at…": a date and time on the device's clock, and an optional message. */
+function WakeDialog({
+  taskId,
+  visible,
+  onClose,
+}: {
+  taskId: string;
+  visible: boolean;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState<WakeForm>(() => openWakeForm(new Date()));
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!visible) return;
+    setForm(openWakeForm(new Date()));
+    setError(null);
+    setBusy(false);
+  }, [visible]);
+  const setDate = useCallback((date: string) => setForm((f) => ({ ...f, date })), []);
+  const setTime = useCallback((time: string) => setForm((f) => ({ ...f, time })), []);
+  const setMessage = useCallback((message: string) => setForm((f) => ({ ...f, message })), []);
+  const confirm = useCallback(() => {
+    const checked = checkWakeForm(form, new Date());
+    if ("error" in checked) {
+      setError(checked.error);
+      return;
+    }
+    const run = async () => {
+      setBusy(true);
+      setError(null);
+      const refusal = await taskExtrasStore.armWakeup(taskId, checked.request);
+      setBusy(false);
+      if (refusal) setError(refusal);
+      else onClose();
+    };
+    void run();
+  }, [form, taskId, onClose]);
+  const zone = deviceTimeZone();
+  return (
+    <CenteredDialog
+      visible={visible}
+      title="Wake this task at…"
+      message={`The task gets your message then, and starts again if it is paused. Your time${zone ? ` (${zone})` : ""}.`}
+      confirmLabel="Wake then"
+      busy={busy}
+      onCancel={onClose}
+      onConfirm={confirm}
+      testID="jarvis3-wake-dialog"
+    >
+      {visible ? (
+        <View style={styles.wakeForm}>
+          <View style={styles.wakeRow}>
+            <View style={styles.wakeField}>
+              <Text style={styles.wakeLabel}>Date</Text>
+              <FormTextInput
+                initialValue={form.date}
+                onChangeText={setDate}
+                placeholder="YYYY-MM-DD"
+                accessibilityLabel="Date"
+                size="sm"
+                testID="jarvis3-wake-date"
+              />
+            </View>
+            <View style={styles.wakeField}>
+              <Text style={styles.wakeLabel}>Time</Text>
+              <FormTextInput
+                initialValue={form.time}
+                onChangeText={setTime}
+                placeholder="HH:MM"
+                accessibilityLabel="Time"
+                size="sm"
+                testID="jarvis3-wake-time"
+              />
+            </View>
+          </View>
+          <Text style={styles.wakeLabel}>Message for the agent (optional)</Text>
+          <FormTextInput
+            initialValue=""
+            onChangeText={setMessage}
+            placeholder="Check whether the supplier replied."
+            accessibilityLabel="Message for the agent"
+            multiline
+            size="sm"
+            testID="jarvis3-wake-message"
+          />
+          {error ? (
+            <Text style={styles.wakeupError} testID="jarvis3-wake-error">
+              {error}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+    </CenteredDialog>
   );
 }
 
@@ -173,25 +292,37 @@ function WakeupsSection({
   cancelling,
   cancelErrors,
   onCancel,
+  onWake,
 }: {
   entry: { loaded: boolean; wakeups: WakeupView[]; error: string | null } | undefined;
   readOnly: boolean;
   cancelling: Record<string, true>;
   cancelErrors: Record<string, string>;
   onCancel: (wakeup: WakeupView) => void;
+  /** null: the task can't be woken from here (someone else's, or ended). */
+  onWake: (() => void) | null;
 }) {
   const wakeups = entry?.wakeups;
   const ordered = useMemo(() => wakeupsOrdered(wakeups ?? []), [wakeups]);
+  const wake = useMemo(
+    () =>
+      onWake ? (
+        <Button variant="outline" size="sm" onPress={onWake} testID="jarvis3-wake-open">
+          Wake this task at…
+        </Button>
+      ) : null,
+    [onWake],
+  );
   if (!entry?.loaded) return null;
   const error = entry.error;
   return (
-    <SettingsSection title="Wakeups">
+    <SettingsSection title="Wakeups" trailing={wake}>
       {error ? <Banner tone="error">{error}</Banner> : null}
       {ordered.length === 0 ? (
         <SettingsCard>
           <SettingsRow
             label="No wakeups"
-            hint="The agent can ask to be woken later (at a time, on a repeat, or when a page changes). The task starts again by itself if it was paused."
+            hint="The agent can ask to be woken later (at a time, on a repeat, or when a page changes), and you can wake it at a time. The task starts again by itself if it was paused."
           />
         </SettingsCard>
       ) : (
@@ -240,7 +371,7 @@ function WakeupRow({
   );
   return (
     <SettingsRow
-      label={wakeup.name}
+      label={wakeup.setBy === "owner" ? `${wakeup.name} (set by you)` : wakeup.name}
       labelAccessory={pill}
       hint={hint}
       error={error ?? undefined}
@@ -301,6 +432,21 @@ const styles = StyleSheet.create((theme) => ({
   },
   wakeupPrompt: {
     color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
+  wakeForm: {
+    gap: theme.spacing[2],
+  },
+  wakeRow: {
+    flexDirection: "row",
+    gap: theme.spacing[2],
+  },
+  wakeField: {
+    flex: 1,
+    gap: theme.spacing[1],
+  },
+  wakeLabel: {
+    color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
   },
   wakeupError: {

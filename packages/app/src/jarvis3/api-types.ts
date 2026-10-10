@@ -1,4 +1,4 @@
-// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit e7654a6); refresh with
+// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit bdaa74d); refresh with
 // scripts/jarvis3-sync-api-types.sh. Type-only: never add runtime code here.
 // The Jarvis 3 instance API contract: request and response shapes of every route.
 // docs/API.md describes the routes and who may call them; this module is the machine-checked
@@ -970,6 +970,8 @@ export interface WakeupView {
   lastError: string | null;
   checks: number;
   createdAt: IsoTime;
+  /** Who armed it: the task's agent, or its owner from the app (`POST /api/tasks/:id/wakeups`). Absent on servers before it. */
+  setBy?: "task" | "owner";
 }
 
 /**
@@ -1006,6 +1008,15 @@ export interface SessionWakeupRequest {
   /** check: give up after this (ISO; default 7 days, at most 30). cron: last firing before this. */
   until?: IsoTime;
   failPrompt?: string;
+}
+
+/**
+ * POST /api/tasks/:id/wakeups (the task's owner, from the app): wake the task once at `at`.
+ * `prompt` is what the agent gets then (default: a line saying the owner asked to be woken).
+ */
+export interface ArmWakeupRequest {
+  at: IsoTime;
+  prompt?: string;
 }
 
 /** A message waiting for the task's agent (GET /api/session/inbox). */

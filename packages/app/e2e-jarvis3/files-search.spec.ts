@@ -212,6 +212,66 @@ test("New task: an attached file is uploaded and its path goes with the first pr
   expect(request?.requestId && attached.includes(request.requestId)).toBe(true);
 });
 
+test("New task: files already in Files are attached by path, with a fresh upload", async ({
+  page,
+  context,
+}) => {
+  await signIn(context, "alice@example.org");
+  const openChooser = async () => {
+    await expect(page.getByTestId("jarvis3-new-task-screen")).toBeVisible();
+    await visible(page, "jarvis3-new-task-from-files").click();
+    await expect(visible(page, "jarvis3-from-files-dialog")).toBeVisible();
+    await expect(visible(page, "jarvis3-from-files-reports/q3.txt")).toBeVisible();
+  };
+  // screenshots of the chooser: phone and desktop, light and dark
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    for (const [label, width, height] of [
+      ["phone", 390, 900],
+      ["desktop", 1440, 900],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${instance.url}/tasks/new`);
+      await openChooser();
+      await visible(page, "jarvis3-from-files-summary.md").click();
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: path.join(SHOTS, `new-task-from-files-${label}-${scheme}.png`) });
+    }
+  }
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${instance.url}/tasks/new`);
+  await openChooser();
+  const dialog = visible(page, "jarvis3-from-files-dialog");
+  // newest first; the filter narrows on any part of the path
+  await expect(dialog).toContainText("summary.md");
+  await page.getByRole("textbox", { name: "Filter your files" }).filter({ visible: true }).fill("REPORTS");
+  await expect(visible(page, "jarvis3-from-files-summary.md")).toHaveCount(0);
+  await visible(page, "jarvis3-from-files-reports/q3.txt").click();
+  await expect(visible(page, "jarvis3-from-files-dialog-confirm")).toHaveText("Attach 1 file");
+  await visible(page, "jarvis3-from-files-dialog-confirm").click();
+  await expect(visible(page, "jarvis3-from-files-dialog")).toHaveCount(0);
+  await expect(visible(page, "jarvis3-chosen-reports/q3.txt")).toContainText("In your Files");
+  // a new file next to it, uploaded on submit
+  await uploadThroughPicker(page, "jarvis3-new-task-attach", "fresh.txt", "fresh notes");
+  await expect(visible(page, "jarvis3-attachment-0")).toContainText("fresh.txt");
+  const uploadsBefore = instance.state.requests.filter((r) => r.startsWith("PUT ")).length;
+  await expect(async () => {
+    await visible(page, "jarvis3-new-task-prompt").fill("Compare the fresh notes with Q3");
+    await expect(visible(page, "jarvis3-new-task-submit")).toBeEnabled({ timeout: 2_000 });
+  }).toPass();
+  await visible(page, "jarvis3-new-task-submit").click();
+  await expect(page).toHaveURL(/\/tasks\/new0+2$/);
+  const request = instance.state.createRequests.at(-1);
+  expect(request?.attachments).toHaveLength(2);
+  expect(request?.attachments?.[0]).toMatch(/^attachments\/[A-Za-z0-9_-]+\/fresh\.txt$/);
+  expect(request?.attachments?.[1]).toBe("reports/q3.txt");
+  // only the new file went up: the chosen one is attached by path
+  const puts = instance.state.requests.filter((r) => r.startsWith("PUT ")).slice(uploadsBefore);
+  expect(puts).toHaveLength(1);
+  expect(puts[0]).toContain("fresh.txt");
+});
+
 test("search: finds a message in an archived task and opens the transcript around it", async ({
   page,
   context,

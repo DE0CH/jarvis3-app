@@ -4,6 +4,7 @@ import { createJarvis3Api } from "./api";
 import { createApprovalsStore } from "./approvals";
 import { getInstanceUrl } from "./config";
 import { deviceHeaders } from "./device-token";
+import { nativeFileUploader } from "./upload-file";
 import { registerJarvis3InstanceUrl } from "./ws-hook";
 import { createSchedulesStore, createTaskExtrasStore, deviceTimeZone } from "./schedules";
 import {
@@ -19,6 +20,7 @@ export const jarvis3Api = createJarvis3Api({
   credentials: Platform.OS === "web" ? "include" : "omit",
   fetch: (input, init) => fetch(input, init),
   timeZone: deviceTimeZone,
+  uploadFromFile: nativeFileUploader,
 });
 
 const timers = {

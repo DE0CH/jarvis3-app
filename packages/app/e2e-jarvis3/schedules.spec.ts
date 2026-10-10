@@ -24,6 +24,7 @@ const SHOTS = path.resolve(
 const TASK = "e5e5e5e5e5e5e5e5";
 const TASK_TITLE = "Supplier summary · 6 Oct 09:00";
 const SCHEDULE = "sch-supplier";
+const ADMIN_TASK = "a1a1a1a1a1a1a1a1";
 
 let instance: MockInstance;
 
@@ -45,6 +46,14 @@ function fixtures() {
     connected: false,
     agentId: null,
     scheduleId: SCHEDULE,
+  };
+  // the admin's own task, with an unread post: the Users page words it as just "unread"
+  const adminTask: TaskView = {
+    ...task,
+    id: ADMIN_TASK,
+    userId: "u-admin",
+    title: "Admin's weekly check",
+    scheduleId: null,
   };
   const schedule: ScheduleDetail = {
     id: SCHEDULE,
@@ -99,6 +108,15 @@ function fixtures() {
       title: "Supplier summary, week 40",
       text: "## Week 40\n\n- **3** new suppliers onboarded\n- 2 contracts up for renewal in November\n- Late payment: *Example Freight Ltd* (12 days)\n\n| Supplier | Spend |\n|---|---|\n| Example Paper | £4,210 |\n| Example Freight | £2,980 |",
       createdAt: "2026-10-06T08:41:00.000Z",
+      read: false,
+    },
+    {
+      id: "p-admin",
+      taskId: ADMIN_TASK,
+      userId: "u-admin",
+      title: "Weekly check done",
+      text: "Nothing to report.",
+      createdAt: "2026-10-06T09:00:00.000Z",
       read: false,
     },
   ];
@@ -162,7 +180,7 @@ function fixtures() {
       },
     ],
   };
-  return { task, schedule, posts, wakeups, notices };
+  return { task, adminTask, schedule, posts, wakeups, notices };
 }
 
 test.beforeAll(async () => {
@@ -171,7 +189,7 @@ test.beforeAll(async () => {
   instance = await startMockInstance({
     distDir: DIST,
     startDelayMs: 1_000,
-    tasks: [f.task],
+    tasks: [f.task, f.adminTask],
     schedules: [f.schedule],
     posts: f.posts,
     wakeups: f.wakeups,
@@ -316,6 +334,12 @@ test("admin: a person's channels from the Users page, read-only, nothing marked 
   const records = page.getByTestId("jarvis3-user-records-u-alice");
   await expect(records).toContainText(TASK_TITLE);
   await expect(records).toContainText("2 posts, 1 unread by them");
+  // on the admin's own row the same count is just "unread"
+  await page.getByTestId("jarvis3-user-u-admin").getByText("Tasks & layer").click();
+  const own = page.getByTestId("jarvis3-user-records-u-admin");
+  await expect(own).toContainText("Admin's weekly check");
+  await expect(own).toContainText("1 post, 1 unread");
+  await expect(own).not.toContainText("unread by them");
   await page.getByTestId(`jarvis3-user-channel-${TASK}`).click();
   await expect(page).toHaveURL(new RegExp(`/channels/${TASK}$`));
   await expect(page.getByTestId("jarvis3-channel-posts")).toContainText(
@@ -326,6 +350,7 @@ test("admin: a person's channels from the Users page, read-only, nothing marked 
   await expect(page.getByTestId("jarvis3-wakeups")).toContainText("supplier-reply");
   await expect(page.getByTestId("jarvis3-wakeup-cancel-w-reply")).toHaveCount(0);
   await expect(page.getByTestId("jarvis3-channel-open-chat")).toHaveCount(0);
+  await expect(page.getByTestId("jarvis3-wake-open")).toHaveCount(0);
   await shoot(page, "channel-admin", () => expect(banner).toBeVisible());
   // reading it changed nothing for alice
   expect(instance.state.requests).not.toContain(`POST /api/tasks/${TASK}/posts/read`);
@@ -374,6 +399,63 @@ test("a task's channel and wakeups: posts read on opening, cancel a wakeup", asy
 
   await page.goto(`${instance.url}/tasks`);
   await expect(page.getByTestId(`jarvis3-task-channel-${TASK}`)).toHaveText("Channel");
+});
+
+test("Wake this task at…: the owner arms a timed wakeup with a message", async ({
+  page,
+  context,
+}) => {
+  await signIn(context, "alice@example.org");
+  await page.goto(`${instance.url}/channels/${TASK}`);
+  const open = page.getByTestId("jarvis3-wake-open");
+  await expect(open).toBeVisible();
+  const openDialog = async () => {
+    await page.getByTestId("jarvis3-wake-open").click();
+    await expect(page.getByTestId("jarvis3-wake-dialog")).toBeVisible();
+  };
+  await openDialog();
+  await shoot(page, "wake-dialog", async () => {
+    if (!(await page.getByTestId("jarvis3-wake-dialog").isVisible())) await openDialog();
+    await expect(page.getByRole("textbox", { name: "Date", exact: true })).toBeVisible();
+  });
+  if (!(await page.getByTestId("jarvis3-wake-dialog").isVisible())) await openDialog();
+
+  // a time that has passed is refused in the dialog, before anything is sent
+  await page.getByRole("textbox", { name: "Date", exact: true }).fill("2020-01-01");
+  await page.getByTestId("jarvis3-wake-dialog-confirm").click();
+  await expect(page.getByTestId("jarvis3-wake-error")).toContainText("has passed");
+  expect(instance.state.requests).not.toContain(`POST /api/tasks/${TASK}/wakeups`);
+
+  // tomorrow at 09:30, the device's clock
+  const tomorrow = new Date(Date.now() + 24 * 3600_000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const date = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`;
+  await page.getByRole("textbox", { name: "Date", exact: true }).fill(date);
+  await page.getByRole("textbox", { name: "Time", exact: true }).fill("09:30");
+  await page.getByRole("textbox", { name: "Message for the agent" }).fill("Check whether Example Freight paid.");
+  await page.getByTestId("jarvis3-wake-dialog-confirm").click();
+  await expect(page.getByTestId("jarvis3-wake-dialog")).toHaveCount(0);
+  const armed = instance.state.wakeups.find((w) => w.setBy === "owner");
+  expect(armed?.prompt).toBe("Check whether Example Freight paid.");
+  const expected = new Date(
+    tomorrow.getFullYear(),
+    tomorrow.getMonth(),
+    tomorrow.getDate(),
+    9,
+    30,
+  ).toISOString();
+  expect(armed?.at).toBe(expected);
+  const row = page.getByTestId(`jarvis3-wakeup-${armed?.id}`);
+  await expect(row).toContainText("(set by you)");
+  await expect(row).toContainText("Check whether Example Freight paid.");
+  await expect(page.getByTestId(`jarvis3-wakeup-cancel-${armed?.id}`)).toBeVisible();
+
+  // someone else's task: no such task for them
+  await context.clearCookies();
+  await signIn(context, "bob@example.org");
+  await page.goto(`${instance.url}/channels/${TASK}`);
+  await expect(page.getByText("This task doesn't exist, or isn't yours.")).toBeVisible();
+  await expect(page.getByTestId("jarvis3-wake-open")).toHaveCount(0);
 });
 
 test("a new post's notice opens the channel; another user can't open it", async ({

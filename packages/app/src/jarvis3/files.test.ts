@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createJarvis3Api, type UploadBody } from "./api";
 import type { FileList, FileView } from "./api-types";
 import {
+  attachmentList,
   attachmentPaths,
   breadcrumbs,
+  chooserFiles,
   encodeFilePath,
   filePathError,
   folderExists,
@@ -11,6 +13,7 @@ import {
   listFolder,
   planMove,
   safeFileName,
+  toggleChosen,
   uploadSizeError,
 } from "./files";
 import { attachmentItems, createFilesStore, type PickedFile, uploadPicked } from "./files-store";
@@ -44,7 +47,11 @@ function fileList(files: FileView[], patch: Partial<FileList> = {}): FileList {
 }
 
 function picked(name: string, bytes = 5, mimeType = "text/plain"): PickedFile {
-  return { fileName: name, mimeType, readBytes: async () => new Uint8Array(bytes) };
+  return {
+    fileName: name,
+    mimeType,
+    source: async () => ({ kind: "bytes", bytes: new Uint8Array(bytes) }),
+  };
 }
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -189,12 +196,12 @@ describe("attachments", () => {
   });
 
   it("refuses a file over the limit before reading it when its size is known", async () => {
-    const readBytes = vi.fn(async () => new Uint8Array(1));
+    const source = vi.fn(async () => ({ kind: "bytes" as const, bytes: new Uint8Array(1) }));
     const huge: PickedFile = {
       fileName: "huge.mov",
       mimeType: "video/quicktime",
       size: 101,
-      readBytes,
+      source,
     };
     const uploadFile = vi.fn();
     const result = await uploadPicked(
@@ -206,7 +213,7 @@ describe("attachments", () => {
       () => undefined,
     );
     expect(result[0]?.state).toBe("failed");
-    expect(readBytes).not.toHaveBeenCalled();
+    expect(source).not.toHaveBeenCalled();
     expect(uploadFile).not.toHaveBeenCalled();
   });
 });
@@ -215,7 +222,7 @@ describe("files API and store", () => {
   it("uploads the raw bytes with their type to the encoded path", async () => {
     const fetch = vi.fn(async () => jsonResponse(201, file("my docs/a b.txt")));
     await apiWith(fetch).uploadFile("my docs/a b.txt", {
-      bytes: new Uint8Array([1, 2, 3]),
+      source: { kind: "bytes", bytes: new Uint8Array([1, 2, 3]) },
       contentType: "text/plain",
     });
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
@@ -223,6 +230,87 @@ describe("files API and store", () => {
     expect(init.method).toBe("PUT");
     expect(init.body).toEqual(new Uint8Array([1, 2, 3]));
     expect((init.headers as Record<string, string>)["Content-Type"]).toBe("text/plain");
+  });
+
+  it("streams a web File: the Blob itself is the body, never read into memory", async () => {
+    const fetch = vi.fn(async () => jsonResponse(201, file("big.mov")));
+    const blob = new Blob([new Uint8Array(1000)], { type: "video/quicktime" });
+    const arrayBuffer = vi.spyOn(blob, "arrayBuffer");
+    await apiWith(fetch).uploadFile("big.mov", {
+      source: { kind: "blob", blob },
+      contentType: "video/quicktime",
+    });
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBe(blob);
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("uploads a device file from disk through the native uploader, with the headers", async () => {
+    const fetch = vi.fn();
+    const uploadFromFile = vi.fn(async () => ({
+      status: 201,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(file("scan.pdf")),
+    }));
+    const api = createJarvis3Api({
+      baseUrl: () => "https://i.example.org",
+      authHeaders: () => ({ "CF-Access-Client-Id": "id", "CF-Access-Client-Secret": "s" }),
+      credentials: "omit",
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      uploadFromFile,
+    });
+    const view = await api.uploadFile("docs/scan.pdf", {
+      source: { kind: "file", uri: "file:///cache/scan.pdf", size: 80_000_000 },
+      contentType: "application/pdf",
+    });
+    expect(view.path).toBe("scan.pdf");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(uploadFromFile).toHaveBeenCalledWith(
+      "https://i.example.org/api/users/me/files/docs/scan.pdf",
+      "file:///cache/scan.pdf",
+      expect.objectContaining({
+        "CF-Access-Client-Id": "id",
+        "Content-Type": "application/pdf",
+      }),
+    );
+    // its refusals read like fetch's
+    uploadFromFile.mockResolvedValueOnce({
+      status: 413,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ error: { code: "too_large", message: "over your quota" } }),
+    });
+    await expect(
+      api.uploadFile("x.pdf", {
+        source: { kind: "file", uri: "file:///x.pdf", size: 1 },
+        contentType: "application/pdf",
+      }),
+    ).rejects.toMatchObject({ code: "too_large" });
+    // without a native uploader (the web) a file source is refused, not read
+    await expect(
+      apiWith(vi.fn()).uploadFile("x.pdf", {
+        source: { kind: "file", uri: "file:///x.pdf", size: 1 },
+        contentType: "",
+      }),
+    ).rejects.toThrow(/can't upload files from disk/);
+  });
+
+  it("checks a streamed file's size from its source, before uploading", async () => {
+    const uploadFile = vi.fn();
+    const big: PickedFile = {
+      fileName: "big.bin",
+      mimeType: "",
+      source: async () => ({ kind: "file", uri: "file:///big.bin", size: 101 }),
+    };
+    const [item] = await uploadPicked(
+      { uploadFile },
+      attachmentItems("r1", [big]),
+      [big],
+      fileList([]),
+      "me",
+      () => undefined,
+    );
+    expect(item?.state).toBe("failed");
+    expect(uploadFile).not.toHaveBeenCalled();
   });
 
   it("asks for a download link, moves and deletes, for me or another user", async () => {
@@ -249,7 +337,10 @@ describe("files API and store", () => {
       jsonResponse(413, { error: { code: "too_large", message: "over your 1 GiB quota" } }),
     );
     await expect(
-      apiWith(fetch).uploadFile("a", { bytes: new Uint8Array(1), contentType: "" }),
+      apiWith(fetch).uploadFile("a", {
+        source: { kind: "bytes", bytes: new Uint8Array(1) },
+        contentType: "",
+      }),
     ).rejects.toMatchObject({ code: "too_large", message: "Over your 1 GiB quota" });
   });
 
@@ -284,5 +375,38 @@ describe("files API and store", () => {
     expect(await store.remove("renamed.txt")).toBe(true);
     expect(store.get().list?.files.map((f) => f.path)).toEqual(["docs/new.txt"]);
     expect(store.get().busyPath).toBeNull();
+  });
+});
+
+describe("New task: attaching files already in Files", () => {
+  const files = [
+    file("reports/Q3.pdf", 10, { updatedAt: "2026-10-01T10:00:00.000Z" }),
+    file("photos/site.jpg", 10, { updatedAt: "2026-10-09T10:00:00.000Z" }),
+    file("notes.txt", 10, { updatedAt: "2026-10-05T10:00:00.000Z" }),
+  ];
+
+  it("lists them newest first and filters on any part of the path", () => {
+    expect(chooserFiles(files, "").map((f) => f.path)).toEqual([
+      "photos/site.jpg",
+      "notes.txt",
+      "reports/Q3.pdf",
+    ]);
+    expect(chooserFiles(files, " q3 ").map((f) => f.path)).toEqual(["reports/Q3.pdf"]);
+    expect(chooserFiles(files, "REPORTS/").map((f) => f.path)).toEqual(["reports/Q3.pdf"]);
+    expect(chooserFiles(files, "nothing")).toEqual([]);
+  });
+
+  it("toggles a choice and stops at the room left", () => {
+    expect(toggleChosen([], "a", 2)).toEqual(["a"]);
+    expect(toggleChosen(["a"], "b", 2)).toEqual(["a", "b"]);
+    expect(toggleChosen(["a", "b"], "c", 2)).toEqual(["a", "b"]);
+    expect(toggleChosen(["a", "b"], "a", 2)).toEqual(["b"]);
+    expect(toggleChosen([], "a", 0)).toEqual([]);
+  });
+
+  it("sends uploads and chosen files together, each path once", () => {
+    expect(attachmentList(["attachments/r1/x.txt"], ["notes.txt", "attachments/r1/x.txt"])).toEqual(
+      ["attachments/r1/x.txt", "notes.txt"],
+    );
   });
 });

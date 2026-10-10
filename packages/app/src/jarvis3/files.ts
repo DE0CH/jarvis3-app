@@ -210,3 +210,29 @@ export function planMove(
 export function fileSourceLabel(file: Pick<FileView, "source" | "taskId">): string | null {
   return file.source === "session" ? "Saved by a task" : null;
 }
+
+/**
+ * New task's "From my files": the user's files matching `filter` (any part of the path, any case),
+ * newest first, so what was just uploaded or saved by a task is at the top.
+ */
+export function chooserFiles(files: readonly FileView[], filter: string): FileView[] {
+  const needle = filter.trim().toLowerCase();
+  return files
+    .filter((file) => !needle || file.path.toLowerCase().includes(needle))
+    .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.path.localeCompare(b.path));
+}
+
+/**
+ * Adds or removes `path` from the files chosen from the user's files; adding stops at `room`
+ * (what the first prompt still has space for besides the picked uploads).
+ */
+export function toggleChosen(chosen: readonly string[], path: string, room: number): string[] {
+  if (chosen.includes(path)) return chosen.filter((p) => p !== path);
+  if (chosen.length >= room) return [...chosen];
+  return [...chosen, path];
+}
+
+/** The first prompt's attachments: the uploads, then the chosen files, each path once. */
+export function attachmentList(uploaded: readonly string[], chosen: readonly string[]): string[] {
+  return [...new Set([...uploaded, ...chosen])];
+}

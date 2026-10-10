@@ -387,6 +387,54 @@ export function createMockSchedules(deps: MockSchedulesDeps) {
       },
     ],
     [
+      // The owner wakes their task at a time; owner only (an admin gets the uniform 404).
+      "POST",
+      new RegExp(`^/api/tasks/${ID}/wakeups$`),
+      async ({ user, params, body }) => {
+        const task = deps.ownTask(user, params[0] ?? "");
+        if (task.userId !== user.id) throw deps.fail(404, "not_found", "no such task");
+        const req = (await body()) as { at?: unknown; prompt?: unknown };
+        const at = typeof req.at === "string" ? Date.parse(req.at) : Number.NaN;
+        if (!Number.isFinite(at)) throw deps.fail(400, "bad_request", "at must be an ISO-8601 time");
+        if (at <= Date.now()) throw deps.fail(400, "bad_request", "the wakeup time is in the past");
+        if (["archived", "destroying", "failed"].includes(task.state)) {
+          throw deps.fail(409, "conflict", `the task is ${task.state}; it can't be woken`);
+        }
+        const armed = wakeups.filter((w) => w.taskId === task.id && w.state === "armed");
+        if (armed.length >= 10) {
+          throw deps.fail(429, "too_many_requests", "a task may have at most 10 armed wakeups");
+        }
+        counter += 1;
+        const prompt =
+          typeof req.prompt === "string" && req.prompt.trim()
+            ? req.prompt.trim()
+            : "Your user asked, from the app, for this task to be woken now.";
+        const w: WakeupView = {
+          id: `w-app-${counter}`,
+          taskId: task.id,
+          userId: task.userId,
+          name: `app-${String(counter).padStart(6, "0")}`,
+          kind: "time",
+          prompt,
+          failPrompt: null,
+          at: new Date(at).toISOString(),
+          cron: null,
+          timeZone: null,
+          check: null,
+          intervalSeconds: null,
+          expiresAt: null,
+          state: "armed",
+          firedAt: null,
+          lastError: null,
+          checks: 0,
+          createdAt: now(),
+          setBy: "owner",
+        };
+        wakeups.push(w);
+        return [201, w];
+      },
+    ],
+    [
       "DELETE",
       new RegExp(`^/api/wakeups/${ID}$`),
       ({ user, params }) => {

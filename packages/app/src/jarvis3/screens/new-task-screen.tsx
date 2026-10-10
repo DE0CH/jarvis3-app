@@ -1,18 +1,23 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import { Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Pressable, Text, View } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { StyleSheet } from "react-native-unistyles";
 import { SettingsCard, SettingsSelect } from "@/components/settings";
 import { SettingsTextAreaCard } from "@/components/settings-textarea";
 import { Button } from "@/components/ui/button";
-import { useFilePicker } from "@/hooks/use-file-picker";
+import { FormTextInput } from "@/components/ui/form-field";
+import { ScrollView } from "@/components/ui/scroll-view";
+import type { FileView } from "../api-types";
+import { pickFilesToUpload } from "../pick-files";
 import { jarvis3Api, tasksStore } from "../client";
-import { ATTACHMENTS_MAX } from "../files";
+import { ATTACHMENTS_MAX, attachmentList, chooserFiles, formatBytes, toggleChosen } from "../files";
 import { attachmentItems, type PickedFile, uploadPicked, type UploadItem } from "../files-store";
 import { useAccount } from "../hooks";
 import { messageOf } from "../stores";
-import { Banner, Jarvis3Frame } from "../ui";
+import { Banner, CenteredDialog, Jarvis3Frame } from "../ui";
+import { countOf } from "../count";
 import { uploadLabel } from "./files-screen";
+import { formatWhen } from "./format";
 
 const PROMPT_MAX = 16_000;
 
@@ -31,10 +36,12 @@ export function NewTaskScreen() {
   // One id per form, so a double press or a retry after a dropped answer creates one task.
   const requestId = useRef(newRequestId());
   const filesOn = account.me?.features?.files === true;
-  const { pickFiles } = useFilePicker();
   // Picked files and their upload state, index for index.
   const [picked, setPicked] = useState<PickedFile[]>([]);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
+  // Files already in the user's Files, attached by path (no upload).
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [choosing, setChoosing] = useState(false);
 
   const options = useMemo(
     () => (models?.models ?? []).map((entry) => ({ label: entry.label, value: entry.id })),
@@ -47,9 +54,9 @@ export function NewTaskScreen() {
   const attach = useCallback(() => {
     const run = async () => {
       try {
-        const more = await pickFiles();
+        const more = await pickFilesToUpload();
         if (!more?.length) return;
-        const all = [...picked, ...more].slice(0, ATTACHMENTS_MAX);
+        const all = [...picked, ...more].slice(0, ATTACHMENTS_MAX - chosen.length);
         const done = new Map(uploads.map((item) => [item.path, item]));
         setPicked(all);
         // Paths are planned over every picked file so names stay unique; what already went up
@@ -62,7 +69,7 @@ export function NewTaskScreen() {
       }
     };
     void run();
-  }, [pickFiles, picked, uploads]);
+  }, [picked, uploads, chosen.length]);
   const detach = useCallback(
     (index: number) => {
       // Names are planned again, so each file uploads (again) on submit: a PUT replaces.
@@ -91,7 +98,14 @@ export function NewTaskScreen() {
           prompt: trimmed,
           ...(selectedModel ? { model: selectedModel } : {}),
           requestId: requestId.current,
-          ...(items.length ? { attachments: items.map((item) => item.path) } : {}),
+          ...(items.length || chosen.length
+            ? {
+                attachments: attachmentList(
+                  items.map((item) => item.path),
+                  chosen,
+                ),
+              }
+            : {}),
         });
         router.replace(`/tasks/${encodeURIComponent(task.id)}` as Href);
       } catch (e) {
@@ -100,7 +114,17 @@ export function NewTaskScreen() {
       }
     };
     void run();
-  }, [trimmed, submitting, selectedModel, router, uploads, picked]);
+  }, [trimmed, submitting, selectedModel, router, uploads, picked, chosen]);
+  const openChooser = useCallback(() => setChoosing(true), []);
+  const closeChooser = useCallback(() => setChoosing(false), []);
+  const applyChosen = useCallback((paths: string[]) => {
+    setChosen(paths);
+    setChoosing(false);
+  }, []);
+  const unchoose = useCallback(
+    (path: string) => setChosen((current) => current.filter((p) => p !== path)),
+    [],
+  );
   const cancel = useCallback(() => router.back(), [router]);
 
   return (
@@ -125,7 +149,24 @@ export function NewTaskScreen() {
         ) : null}
       </View>
       {filesOn ? (
-        <Attachments items={uploads} busy={submitting} onAttach={attach} onRemove={detach} />
+        <Attachments
+          items={uploads}
+          chosen={chosen}
+          busy={submitting}
+          onAttach={attach}
+          onChoose={openChooser}
+          onRemove={detach}
+          onUnchoose={unchoose}
+        />
+      ) : null}
+      {filesOn ? (
+        <FromFilesDialog
+          visible={choosing}
+          initial={chosen}
+          room={ATTACHMENTS_MAX - picked.length}
+          onCancel={closeChooser}
+          onDone={applyChosen}
+        />
       ) : null}
       {options.length > 0 ? (
         <SettingsCard>
@@ -163,37 +204,196 @@ export function NewTaskScreen() {
 
 function Attachments({
   items,
+  chosen,
   busy,
   onAttach,
+  onChoose,
   onRemove,
+  onUnchoose,
 }: {
   items: UploadItem[];
+  chosen: string[];
   busy: boolean;
   onAttach: () => void;
+  onChoose: () => void;
   onRemove: (index: number) => void;
+  onUnchoose: (path: string) => void;
 }) {
+  const full = items.length + chosen.length >= ATTACHMENTS_MAX;
   return (
     <SettingsCard testID="jarvis3-new-task-attachments">
       {items.map((item, index) => (
         <AttachmentRow key={item.path} item={item} index={index} busy={busy} onRemove={onRemove} />
       ))}
+      {chosen.map((path) => (
+        <ChosenRow key={path} path={path} busy={busy} onRemove={onUnchoose} />
+      ))}
       <View style={styles.attachRow}>
         <Text style={styles.label}>
-          {items.length
+          {items.length || chosen.length
             ? "The agent finds these in ~/workspace/attachments; they are also kept in your Files."
-            : "Attach documents or photos for the agent (optional)."}
+            : "Attach documents or photos for the agent (optional), new or from your Files."}
         </Text>
-        <Button
-          variant="outline"
-          size="sm"
-          onPress={onAttach}
-          disabled={busy || items.length >= ATTACHMENTS_MAX}
-          testID="jarvis3-new-task-attach"
-        >
-          Attach files
-        </Button>
+        <View style={styles.attachButtons}>
+          <Button
+            variant="outline"
+            size="sm"
+            onPress={onChoose}
+            disabled={busy || (full && chosen.length === 0)}
+            testID="jarvis3-new-task-from-files"
+          >
+            From my files
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onPress={onAttach}
+            disabled={busy || full}
+            testID="jarvis3-new-task-attach"
+          >
+            Attach files
+          </Button>
+        </View>
       </View>
     </SettingsCard>
+  );
+}
+
+function ChosenRow({
+  path,
+  busy,
+  onRemove,
+}: {
+  path: string;
+  busy: boolean;
+  onRemove: (path: string) => void;
+}) {
+  const remove = useCallback(() => onRemove(path), [onRemove, path]);
+  return (
+    <View style={styles.attachRow} testID={`jarvis3-chosen-${path}`}>
+      <View style={styles.attachText}>
+        <Text style={styles.attachName} numberOfLines={1}>
+          {path}
+        </Text>
+        <Text style={styles.label}>In your Files</Text>
+      </View>
+      <Button variant="ghost" size="sm" onPress={remove} disabled={busy}>
+        Remove
+      </Button>
+    </View>
+  );
+}
+
+/** "From my files": pick files already in the user's Files; they are attached by path. */
+function FromFilesDialog({
+  visible,
+  initial,
+  room,
+  onCancel,
+  onDone,
+}: {
+  visible: boolean;
+  initial: string[];
+  /** How many may be chosen (the attachment limit minus the picked uploads). */
+  room: number;
+  onCancel: () => void;
+  onDone: (paths: string[]) => void;
+}) {
+  const [files, setFiles] = useState<FileView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const [draft, setDraft] = useState<string[]>(initial);
+
+  useEffect(() => {
+    if (!visible) return;
+    setDraft(initial);
+    setFilter("");
+    setError(null);
+    jarvis3Api
+      .listFiles()
+      .then((list) => setFiles(list.files))
+      .catch((e: unknown) => setError(messageOf(e)));
+  }, [visible, initial]);
+
+  const shown = useMemo(() => chooserFiles(files ?? [], filter), [files, filter]);
+  const toggle = useCallback(
+    (path: string) => setDraft((current) => toggleChosen(current, path, room)),
+    [room],
+  );
+  const done = useCallback(() => onDone(draft), [onDone, draft]);
+  let message = "Loading your files…";
+  if (error) message = error;
+  else if (files && files.length === 0) message = "Your Files are empty. Upload files there first.";
+  else if (files) {
+    message = `Tap the files to attach (up to ${room}). They stay where they are in your Files.`;
+  }
+
+  return (
+    <CenteredDialog
+      visible={visible}
+      title="Attach from your files"
+      message={message}
+      confirmLabel={draft.length ? `Attach ${countOf(draft.length, "file")}` : "Done"}
+      onCancel={onCancel}
+      onConfirm={done}
+      testID="jarvis3-from-files-dialog"
+    >
+      {files && files.length > 0 ? (
+        <View style={styles.chooser}>
+          <FormTextInput
+            initialValue=""
+            onChangeText={setFilter}
+            placeholder="Filter by name or folder"
+            accessibilityLabel="Filter your files"
+            size="sm"
+            testID="jarvis3-from-files-filter"
+          />
+          <ScrollView style={styles.chooserList}>
+            {shown.map((file) => (
+              <ChooserRow
+                key={file.path}
+                file={file}
+                selected={draft.includes(file.path)}
+                onToggle={toggle}
+              />
+            ))}
+            {shown.length === 0 ? <Text style={styles.label}>No file matches.</Text> : null}
+          </ScrollView>
+        </View>
+      ) : null}
+    </CenteredDialog>
+  );
+}
+
+function ChooserRow({
+  file,
+  selected,
+  onToggle,
+}: {
+  file: FileView;
+  selected: boolean;
+  onToggle: (path: string) => void;
+}) {
+  const press = useCallback(() => onToggle(file.path), [onToggle, file.path]);
+  const checked = useMemo(() => ({ checked: selected }), [selected]);
+  return (
+    <Pressable
+      onPress={press}
+      style={selected ? styles.chooserRowSelected : styles.chooserRow}
+      accessibilityRole="checkbox"
+      accessibilityState={checked}
+      testID={`jarvis3-from-files-${file.path}`}
+    >
+      <View style={styles.attachText}>
+        <Text style={styles.attachName} numberOfLines={1}>
+          {file.path}
+        </Text>
+        <Text style={styles.label}>
+          {`${formatBytes(file.size)} · ${formatWhen(file.updatedAt)}`}
+        </Text>
+      </View>
+      <Text style={selected ? styles.checkOn : styles.checkOff}>{selected ? "✓" : ""}</Text>
+    </Pressable>
   );
 }
 
@@ -236,6 +436,44 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[3],
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[4],
+  },
+  attachButtons: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: theme.spacing[2],
+  },
+  chooser: {
+    gap: theme.spacing[2],
+  },
+  chooserList: {
+    maxHeight: 320,
+  },
+  chooserRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    paddingVertical: theme.spacing[2],
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+  },
+  chooserRowSelected: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    paddingVertical: theme.spacing[2],
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+    backgroundColor: theme.colors.surface2,
+  },
+  checkOn: {
+    width: 20,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
+  },
+  checkOff: {
+    width: 20,
   },
   attachText: {
     flex: 1,

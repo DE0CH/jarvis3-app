@@ -394,6 +394,75 @@ export function taskExtrasLine(input: {
   return parts.length ? parts.join(" · ") : null;
 }
 
+/**
+ * A channel on the admin Users page: its posts and how many are unread. On someone else's row the
+ * unread ones are "unread by them"; on the admin's own row they are just unread.
+ */
+export function channelRecordHint(
+  channel: Pick<ChannelView, "posts" | "unread" | "userId">,
+  viewerId: string | null,
+): string {
+  const posts = countOf(channel.posts, "post");
+  if (channel.unread <= 0) return posts;
+  return channel.userId === viewerId
+    ? `${posts}, ${channel.unread} unread`
+    : `${posts}, ${channel.unread} unread by them`;
+}
+
+// ---- "Wake this task at…" (the owner arms a timed wakeup) -------------------------------------
+
+export const WAKE_MESSAGE_MAX = 4000;
+const DAY_MS = 24 * 3600_000;
+
+export interface WakeForm {
+  /** "YYYY-MM-DD", the device's calendar. */
+  date: string;
+  /** "HH:MM", 24-hour, the device's zone. */
+  time: string;
+  /** What the agent gets; empty = the server's default line. */
+  message: string;
+}
+
+const pad = (n: number) => String(n).padStart(2, "0");
+const dateText = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+/** A new form: the next full hour from now (tomorrow's date when that crosses midnight). */
+export function openWakeForm(now: Date): WakeForm {
+  const next = new Date(now.getTime());
+  next.setMinutes(0, 0, 0);
+  next.setHours(next.getHours() + 1);
+  return {
+    date: dateText(next),
+    time: `${pad(next.getHours())}:${pad(next.getMinutes())}`,
+    message: "",
+  };
+}
+
+/** The local time the form names, or why it can't be armed (the server checks the same). */
+export function checkWakeForm(
+  form: WakeForm,
+  now: Date,
+): { at: Date; request: { at: string; prompt?: string } } | { error: string } {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(form.date.trim());
+  if (!d) return { error: "Write the date as YYYY-MM-DD, for example 2026-10-12." };
+  const time = parseTime(form.time.trim());
+  if (!time) return { error: "Write the time as HH:MM, for example 09:00." };
+  const [year, month, day] = [Number(d[1]), Number(d[2]), Number(d[3])];
+  const at = new Date(year, month - 1, day, time.hour, time.minute, 0, 0);
+  if (at.getFullYear() !== year || at.getMonth() !== month - 1 || at.getDate() !== day) {
+    return { error: "That date doesn't exist." };
+  }
+  if (at.getTime() <= now.getTime()) return { error: "That time has passed. Pick a later one." };
+  if (at.getTime() - now.getTime() > 365 * DAY_MS) {
+    return { error: "A wakeup can be at most a year ahead." };
+  }
+  const message = form.message.trim();
+  if (message.length > WAKE_MESSAGE_MAX) {
+    return { error: `The message is limited to ${WAKE_MESSAGE_MAX} characters.` };
+  }
+  return { at, request: { at: at.toISOString(), ...(message ? { prompt: message } : {}) } };
+}
+
 /** Where a notice's button goes, and its label; null when it has none. */
 export function noticeTarget(
   notice: Pick<NoticeView, "kind" | "taskId" | "approvalId">,
@@ -601,7 +670,7 @@ export const REFRESH_TASK_EXTRAS_MS = 15_000;
 
 type ExtrasApi = Pick<
   Jarvis3Api,
-  "listChannels" | "listPosts" | "markPostsRead" | "listWakeups" | "cancelWakeup"
+  "listChannels" | "listPosts" | "markPostsRead" | "listWakeups" | "cancelWakeup" | "armWakeup"
 >;
 
 export function createTaskExtrasStore(
@@ -683,6 +752,22 @@ export function createTaskExtrasStore(
       }
     },
     loadWakeups,
+    /**
+     * "Wake this task at…": arms a timed wakeup for the owner and reloads the task's wakeups once
+     * the server has it (no optimistic update). Returns the refusal's message, or null.
+     */
+    async armWakeup(
+      taskId: string,
+      request: { at: string; prompt?: string },
+    ): Promise<string | null> {
+      try {
+        await api.armWakeup(taskId, request);
+      } catch (error) {
+        return messageOf(error);
+      }
+      await loadWakeups(taskId);
+      return null;
+    },
     /** Cancels a wakeup and waits for the server (no optimistic update). */
     async cancelWakeup(wakeup: WakeupView): Promise<boolean> {
       if (state.cancelling[wakeup.id]) return false;

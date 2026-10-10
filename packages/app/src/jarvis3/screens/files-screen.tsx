@@ -7,9 +7,9 @@ import { useRouter, type Href } from "expo-router";
 import { StyleSheet } from "react-native-unistyles";
 import { SettingsCard, SettingsInput } from "@/components/settings";
 import { Button } from "@/components/ui/button";
-import { useFilePicker } from "@/hooks/use-file-picker";
 import { openExternalUrl } from "@/utils/open-external-url";
 import type { FileView } from "../api-types";
+import { pickFilesToUpload } from "../pick-files";
 import { jarvis3Api } from "../client";
 import {
   baseName,
@@ -39,7 +39,6 @@ export function FilesScreen({ dir, userId }: { dir: string; userId: string | nul
   const owner = userId ?? "me";
   const store = useFilesStore(owner);
   const state = useSyncExternalStore(store.subscribe, store.get, store.get);
-  const { pickFiles } = useFilePicker();
   const [deleting, setDeleting] = useState<FileView | null>(null);
   const [moving, setMoving] = useState<FileView | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -76,14 +75,14 @@ export function FilesScreen({ dir, userId }: { dir: string; userId: string | nul
     const run = async () => {
       setNotice(null);
       try {
-        const picked = await pickFiles();
+        const picked = await pickFilesToUpload();
         if (picked?.length) await store.upload(dir, picked);
       } catch (e) {
         setNotice(messageOf(e));
       }
     };
     void run();
-  }, [pickFiles, store, dir]);
+  }, [store, dir]);
 
   const download = useCallback(
     (file: FileView) => {

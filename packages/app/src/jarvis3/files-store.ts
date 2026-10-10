@@ -1,18 +1,19 @@
 // State for the Files screen and for first-prompt attachments, with the API injected
 // (files.test.ts). One store per screen: the Files screen of `me` or, for an admin, of another
 // user.
-import type { Jarvis3Api } from "./api";
+import { type Jarvis3Api, type UploadSource, uploadSize } from "./api";
 import type { FileList } from "./api-types";
 import { attachmentPaths, joinPath, safeFileName, uploadSizeError } from "./files";
 import { messageOf } from "./stores";
 
-/** A file picked on the device (Paseo's SelectedFile, without its platform details). */
+/** A file picked on the device (pick-files.ts). */
 export interface PickedFile {
   fileName: string;
   mimeType: string;
-  /** Size if known before reading (web File.size); otherwise checked after reading. */
+  /** Size if known when picked; otherwise checked once the source is open. */
   size?: number;
-  readBytes: () => Promise<Uint8Array>;
+  /** What to upload: the file itself (streamed), not its bytes read into memory. */
+  source: () => Promise<UploadSource>;
 }
 
 export type UploadState = "waiting" | "uploading" | "done" | "failed";
@@ -59,15 +60,16 @@ export async function uploadPicked(
     try {
       const early = file.size === undefined ? null : sizeCheck(list, used, item, file.size);
       if (early) throw new Error(early);
-      const bytes = await file.readBytes();
-      const late = sizeCheck(list, used, item, bytes.byteLength);
+      const source = await file.source();
+      const size = uploadSize(source);
+      const late = sizeCheck(list, used, item, size);
       if (late) throw new Error(late);
       await api.uploadFile(
         item.path,
-        { bytes, contentType: file.mimeType || "application/octet-stream" },
+        { source, contentType: file.mimeType || "application/octet-stream" },
         userId,
       );
-      used += bytes.byteLength;
+      used += size;
       set(i, { state: "done" });
     } catch (e) {
       set(i, { state: "failed", error: messageOf(e) });
