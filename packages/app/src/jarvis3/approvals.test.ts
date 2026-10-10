@@ -8,6 +8,7 @@ import {
   approvalStateLabel,
   buildDecideRequest,
   createApprovalsStore,
+  decisionVerb,
   mergeApproval,
   passkeysPageUrl,
   splitQueue,
@@ -54,6 +55,14 @@ describe("approvals: presentation and the queue", () => {
       "Granted",
     );
     expect(approvalStateLabel(approval({ state: "failed" })).tone).toBe("error");
+  });
+
+  it("names the decision, not what happened after it", () => {
+    expect(decisionVerb(approval({ state: "done" }))).toBe("Approved");
+    expect(decisionVerb(approval({ state: "failed" }))).toBe("Approved");
+    expect(decisionVerb(approval({ state: "denied", kind: "access" }))).toBe("Denied");
+    expect(decisionVerb(approval({ state: "approved", kind: "question" }))).toBe("Answered");
+    expect(decisionVerb(approval({ state: "approved", kind: "access" }))).toBe("Granted");
   });
 
   it("puts what the caller can decide first, oldest first, then the rest newest first", () => {

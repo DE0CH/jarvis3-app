@@ -26,6 +26,14 @@ export function approvalStateLabel(approval: ApprovalView): { label: string; ton
   return STATE[approval.state];
 }
 
+/** What the decision was, whatever happened after it: "Approved", "Denied", "Answered", "Granted". */
+export function decisionVerb(approval: ApprovalView): string {
+  if (approval.state === "denied") return "Denied";
+  if (approval.kind === "question") return "Answered";
+  if (approval.kind === "access") return "Granted";
+  return "Approved";
+}
+
 const KIND: Record<ApprovalView["kind"], string> = {
   action: "Action",
   guard: "Command",

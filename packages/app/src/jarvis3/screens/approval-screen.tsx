@@ -15,6 +15,7 @@ import {
   approvalStateLabel,
   approverLabel,
   askedBy,
+  decisionVerb,
   type DecideInput,
   isDecidableNow,
 } from "../approvals";
@@ -152,7 +153,7 @@ function decisionText(approval: ApprovalView): string {
   if (!decision) return "";
   const who = decision.by ? decision.by.name || decision.by.email : "the instance's policy";
   const how = decision.passkey ? " with a passkey" : "";
-  return `${approvalStateLabel(approval).label} by ${who}${how}, ${formatWhen(decision.at)}`;
+  return `${decisionVerb(approval)} by ${who}${how}, ${formatWhen(decision.at)}`;
 }
 
 const SCOPE_TEXT = { task: "This task only", role: "Everyone with the same role" } as const;

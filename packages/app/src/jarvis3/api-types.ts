@@ -1,6 +1,5 @@
-// Vendored from DE0CH/jarvis3 server/src/api-types.ts (DE0CH/jarvis3 approvals milestone, rebased
-// on de8cbff: branch approvals-wip, commit a8f1d09); refresh with
-// scripts/jarvis3-sync-api-types.sh once it is on main. Type-only: never add runtime code here.
+// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit 7f22606); refresh with
+// scripts/jarvis3-sync-api-types.sh. Type-only: never add runtime code here.
 // The Jarvis 3 instance API contract: request and response shapes of every route.
 // docs/API.md describes the routes and who may call them; this module is the machine-checked
 // half of that contract. The app imports it (type-only), so it must stay free of runtime code
