@@ -330,16 +330,16 @@ test("admin: a person's channels from the Users page, read-only, nothing marked 
 }) => {
   await signIn(context, "admin@example.org");
   await page.goto(`${instance.url}/admin/users`);
-  await page.getByTestId("jarvis3-user-u-alice").getByText("Tasks & layer").click();
-  const records = page.getByTestId("jarvis3-user-records-u-alice");
-  await expect(records).toContainText(TASK_TITLE);
-  await expect(records).toContainText("2 posts, 1 unread by them");
-  // on the admin's own row the same count is just "unread"
+  // on the admin's own row a channel's count is just "unread" ("unread by them" on others')
   await page.getByTestId("jarvis3-user-u-admin").getByText("Tasks & layer").click();
   const own = page.getByTestId("jarvis3-user-records-u-admin");
   await expect(own).toContainText("Admin's weekly check");
   await expect(own).toContainText("1 post, 1 unread");
   await expect(own).not.toContainText("unread by them");
+  await page.getByTestId("jarvis3-user-u-alice").getByText("Tasks & layer").click();
+  const records = page.getByTestId("jarvis3-user-records-u-alice");
+  await expect(records).toContainText(TASK_TITLE);
+  await expect(records).toContainText("2 posts, 1 unread by them");
   await page.getByTestId(`jarvis3-user-channel-${TASK}`).click();
   await expect(page).toHaveURL(new RegExp(`/channels/${TASK}$`));
   await expect(page.getByTestId("jarvis3-channel-posts")).toContainText(
@@ -432,7 +432,9 @@ test("Wake this task at…: the owner arms a timed wakeup with a message", async
   const date = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`;
   await page.getByRole("textbox", { name: "Date", exact: true }).fill(date);
   await page.getByRole("textbox", { name: "Time", exact: true }).fill("09:30");
-  await page.getByRole("textbox", { name: "Message for the agent" }).fill("Check whether Example Freight paid.");
+  await page
+    .getByRole("textbox", { name: "Message for the agent" })
+    .fill("Check whether Example Freight paid.");
   await page.getByTestId("jarvis3-wake-dialog-confirm").click();
   await expect(page.getByTestId("jarvis3-wake-dialog")).toHaveCount(0);
   const armed = instance.state.wakeups.find((w) => w.setBy === "owner");
