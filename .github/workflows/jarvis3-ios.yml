@@ -74,13 +74,17 @@ jobs:
         run: packages/app/jarvis3-ios/prepare.sh
 
       - name: Build for the simulator
+        # Ad-hoc signed ("Sign to Run Locally"), not unsigned: an unsigned app has no entitlements,
+        # and the simulator keychain then refuses expo-secure-store's write of the device token
+        # ("A required entitlement isn't present"), so pairing fails after the sheet closes.
         working-directory: packages/app/ios
         run: |
           set -o pipefail
           NAME=$(cat .jarvis3-name)
           xcodebuild -workspace "$NAME.xcworkspace" -scheme "$NAME" -configuration Release \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath build/sim CODE_SIGNING_ALLOWED=NO build | tail -n 40
+            -derivedDataPath build/sim CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO build | tail -n 40
+          codesign -d --entitlements - "build/sim/Build/Products/Release-iphonesimulator/$NAME.app" 2>&1 | head -n 40
 
       - name: Simulator test (pairing against the mock instance)
         timeout-minutes: 45
