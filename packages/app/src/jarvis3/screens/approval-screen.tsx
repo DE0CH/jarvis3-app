@@ -9,6 +9,7 @@ import { SettingsCard, SettingsRow, SettingsSection } from "@/components/setting
 import { SettingsTextAreaCard } from "@/components/settings-textarea";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
+import { CODE_SURFACE_DATASET } from "@/styles/code-surface";
 import type { ApprovalView } from "../api-types";
 import {
   approvalKindLabel,
@@ -110,7 +111,7 @@ function Preview({ approval }: { approval: ApprovalView }) {
         ))}
         {preview.body !== null ? (
           <View style={styles.body} testID="jarvis3-approval-body">
-            <Text style={styles.bodyText} selectable>
+            <Text dataSet={CODE_SURFACE_DATASET} style={styles.bodyText} selectable>
               {preview.body}
             </Text>
           </View>
@@ -177,7 +178,7 @@ function Outcome({ approval }: { approval: ApprovalView }) {
       {approval.error ? <Banner tone="error">{approval.error}</Banner> : null}
       {approval.result ? (
         <View style={styles.body} testID="jarvis3-approval-result">
-          <Text style={styles.bodyText} selectable>
+          <Text dataSet={CODE_SURFACE_DATASET} style={styles.bodyText} selectable>
             {JSON.stringify(approval.result, null, 2)}
           </Text>
         </View>
