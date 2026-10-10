@@ -2,8 +2,8 @@
 # Simulator test of the jarvis3 iOS build against the MOCK instance (e2e-jarvis3/mock-instance.ts),
 # never a real one: the app must have been built with JARVIS3_INSTANCE_URL=http://localhost:8090.
 # Maestro walks the real pairing flow (Sign in -> system sign-in sheet -> the mock's sign-in page ->
-# jarvis3://paired -> Keychain), checks the task list loads with the device token, then relaunches
-# the app and checks it is still paired. Screenshots (mock data only) go to $OUT.
+# jarvis3://paired -> Keychain), checks the task list loads with the device token, relaunches
+# the app and checks it is still paired, then turns push notifications on (maestro/push.yaml). Screenshots (mock data only) go to $OUT.
 # Usage: simulator-test.sh --boot              create and start booting the simulator, install Maestro
 #        simulator-test.sh <path to the .app>   env: JARVIS3_BUNDLE_ID
 # Run --boot at the start of the job: a fresh simulator's first boot (data migration, system apps)
@@ -71,6 +71,17 @@ done
 if [[ $status -eq 0 ]]; then
   maestro --device "$UDID" test --test-output-dir "$OUT/relaunch" -e APP_ID="$JARVIS3_BUNDLE_ID" \
     "$HERE/maestro/relaunch.yaml" || status=$?
+fi
+if [[ $status -eq 0 ]]; then
+  maestro --device "$UDID" test --test-output-dir "$OUT/push" -e APP_ID="$JARVIS3_BUNDLE_ID" \
+    "$HERE/maestro/push.yaml" || status=$?
+  # Whether iOS gave the simulator an APNs token (the mock logs every registration). Not a failure
+  # when it didn't: Apple's push service may not serve a simulator on a CI virtual machine.
+  if grep -q "push subscription apns token=" "$OUT/mock-instance.log"; then
+    echo "APNs token registered: $(grep -o 'apns token=[0-9a-f]*' "$OUT/mock-instance.log" | tail -1)"
+  else
+    echo "no APNs token reached the mock instance"
+  fi
 fi
 xcrun simctl io "$UDID" screenshot "$OUT/final.png" || true
 xcrun simctl shutdown "$UDID" || true

@@ -20,6 +20,7 @@ import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import { exampleApprovals } from "./approval-fixtures";
 import { createMockSchedules } from "./mock-schedules";
+import { createMockPush } from "./mock-push";
 import type {
   ApiError,
   ApprovalView,
@@ -137,7 +138,7 @@ export interface MockInstance {
     createRequests: CreateTaskRequest[];
     /** Download links handed out (GET /api/users/:id/files/<path>?link=1), in order. */
     fileLinks: { path: string; url: string }[];
-  };
+  } & ReturnType<typeof createMockPush>["state"];
   /** A post from a task's agent to its channel (what jarvis_post does), with its notice. */
   addPost(taskId: string, title: string, text: string): ChannelPostView;
   close(): Promise<void>;
@@ -236,6 +237,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       schedules: true,
       files: true,
       search: true,
+      push: { apns: true, webPush: true },
       ...(options.tools ? { tools: { search: true, fetch: true, proxy: true } } : {}),
     },
     unreadPosts: scheduled.unreadPosts(user.id),
@@ -845,9 +847,15 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     posts: options.posts,
   });
 
+  const push = createMockPush({
+    fail: (status, code, message) => new HttpError(status, code, message),
+    log: (line) => console.log(line),
+  });
+
   const ID = "([^/]+)";
   const routes: Route[] = [
     ...scheduled.routes,
+    ...push.routes,
     [
       "GET",
       new RegExp(`^/api/users/${ID}/files$`),
@@ -1272,6 +1280,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       suggestions,
       approvals,
       ...scheduled.state,
+      ...push.state,
       files: fileStore,
       createRequests,
       fileLinks,

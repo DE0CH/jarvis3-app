@@ -8,6 +8,7 @@ import type {
   ApprovalView,
   ChannelList,
   ChannelPostList,
+  CreatePushSubscriptionRequest,
   CreateScheduleRequest,
   CreateTaskRequest,
   DecideRequest,
@@ -23,6 +24,9 @@ import type {
   NoticeList,
   PersonalLayerView,
   PersonalNote,
+  PushSettings,
+  PushSubscriptionView,
+  PushTestResult,
   PutSkillRequest,
   ResetResult,
   ScheduleDetail,
@@ -34,6 +38,7 @@ import type {
   SearchResult,
   SetInstructionsRequest,
   SetLimitsRequest,
+  SetPushKindsRequest,
   SuggestionList,
   SuggestionView,
   SuggestRequest,
@@ -163,6 +168,16 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
         "/api/notices/read",
         (upTo ? { upTo } : {}) satisfies MarkNoticesReadRequest,
       ),
+
+    // Push notifications (docs/API.md section 16): the caller's own settings and subscriptions.
+    pushSettings: () => call<PushSettings>("GET", "/api/push"),
+    setPushKinds: (kinds: SetPushKindsRequest["kinds"]) =>
+      call<PushSettings>("PUT", "/api/push/kinds", { kinds } satisfies SetPushKindsRequest),
+    subscribePush: (request: CreatePushSubscriptionRequest) =>
+      call<PushSubscriptionView>("POST", "/api/push/subscriptions", request),
+    unsubscribePush: (subscriptionId: string) =>
+      call<{ ok: true }>("DELETE", `/api/push/subscriptions/${id(subscriptionId)}`),
+    testPush: () => call<PushTestResult>("POST", "/api/push/test"),
 
     listTasks: () => call<TaskList>("GET", "/api/tasks"),
     getTask: (taskId: string) => call<TaskView>("GET", `/api/tasks/${id(taskId)}`),

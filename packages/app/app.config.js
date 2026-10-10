@@ -46,6 +46,9 @@ const buildProfile = isFdroidBuild
           {
             icon: "./assets/images/notification-icon.png",
             color: "#20744A",
+            // Jarvis 3 ships only TestFlight/App Store builds, whose APNs tokens are production ones
+            // (the instance sends to Apple itself). The iOS workflow checks the entitlement.
+            ...(appVariant === "jarvis3" ? { mode: "production" } : {}),
           },
         ],
       ],
