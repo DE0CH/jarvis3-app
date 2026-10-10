@@ -1,0 +1,43 @@
+# Fresh install against the mock instance: pair through the system sign-in sheet, then the task
+# list loads with the device token (CF-Access-Client-Id/Secret).
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+# upstream's push code asks for notification permission at start; the alert covers the page
+- extendedWaitUntil:
+    visible: ".*Would Like to Send You Notifications.*"
+    timeout: 15000
+    optional: true
+- runFlow:
+    when:
+      visible: ".*Would Like to Send You Notifications.*"
+    commands:
+      - tapOn: "Don.t Allow"
+- extendedWaitUntil:
+    visible:
+      id: "jarvis3-sign-in"
+    timeout: 90000
+- takeScreenshot: 1-sign-in
+- tapOn:
+    id: "jarvis3-sign-in"
+# ASWebAuthenticationSession asks before opening the sheet
+- extendedWaitUntil:
+    visible: "Continue"
+    timeout: 20000
+    optional: true
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+- extendedWaitUntil:
+    visible: "Sign in as alice@example.org"
+    timeout: 30000
+- takeScreenshot: 2-mock-sign-in
+- tapOn: "Sign in as alice@example.org"
+- extendedWaitUntil:
+    visible: "Draft the Q3 supplier summary"
+    timeout: 60000
+- takeScreenshot: 3-tasks

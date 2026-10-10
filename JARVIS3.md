@@ -12,7 +12,9 @@ variant builds plain Paseo, unchanged.
 - All jarvis3 code is in `packages/app/src/jarvis3/`, `packages/app/src/app/(jarvis)/` and
   `packages/app/e2e-jarvis3/`. Upstream files only get the hooks listed below.
 - CI: `.github/workflows/jarvis3.yml` (typecheck, the app's unit tests, upstream's CI-contract
-  tests, a web build of the variant and its Playwright e2e; no signing, no TestFlight).
+  tests, a web build of the variant and its Playwright e2e) and `.github/workflows/jarvis3-ios.yml`
+  (the iOS app: a simulator test against the mock instance, and a TestFlight build; see
+  [Shipping the iOS app](#shipping-the-ios-app)).
   Upstream's own workflows are disabled in this repo: they deploy, release or need
   getpaseo's secrets, and their full CI is too heavy for a private repo's minutes.
 
@@ -149,6 +151,50 @@ node --import tsx e2e-jarvis3/mock-instance.ts --dist dist-jarvis3 --port 8090
 # optional: --daemon ws://127.0.0.1:<port>/ws --daemon-password <pw> to chat with a local daemon
 # open http://127.0.0.1:8090 and set the cookie CF_Authorization=alice@example.org (dev tools)
 ```
+
+## Shipping the iOS app
+
+`.github/workflows/jarvis3-ios.yml` runs on a push to `main` that touches the app (or by hand:
+`gh workflow run jarvis3-ios.yml -R DE0CH/jarvis3-app`, inputs `upload` and `simulator`). Two jobs
+run in parallel on GitHub `macos-26` runners, 40 to 60 min each:
+
+- **simulator**: builds the app with `JARVIS3_INSTANCE_URL=http://localhost:8090`, starts the mock
+  instance there, and Maestro (`packages/app/jarvis3-ios/maestro/`) walks the real pairing flow:
+  Sign in, the system sign-in sheet, the mock's sign-in page (standing in for Cloudflare Access),
+  the `jarvis3://paired` redirect, the task list loaded with the device token, and a relaunch that
+  stays paired. Screenshots go to the `jarvis3-ios-simulator` artifact; they hold mock data only.
+- **testflight**: builds with the instance's URL, archives, cloud-signs with the App Store Connect
+  API key (`-allowProvisioningUpdates`, no certificates anywhere) and uploads. `CFBundleVersion` is
+  `<run number>.<attempt>`; the marketing version comes from `packages/app/package.json`.
+
+The instance is never in git. Per build it comes from the repository's Actions settings:
+
+| Name                                             | Kind     | What                                                                      |
+| ------------------------------------------------ | -------- | ------------------------------------------------------------------------- |
+| `JARVIS3_INSTANCE_URL`                           | secret   | the instance's `https://` origin (masked in the public logs)              |
+| `JARVIS3_BUNDLE_ID`                              | variable | the app's bundle id on the Apple team                                     |
+| `JARVIS3_APP_NAME`                               | variable | the home-screen name                                                      |
+| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY` | secrets  | an App Store Connect API key with the Admin role (cloud signing needs it) |
+
+The app's URL scheme must match the instance's `devices.appScheme` (`jarvis3` unless
+`JARVIS3_SCHEME` says otherwise). One app record serves one instance: a second instance needs its
+own bundle id, app record and set of these values (for example a GitHub environment per instance).
+
+Before the first build, on the Apple team: register the bundle id with the Push Notifications
+capability (upstream's `expo-notifications` adds the `aps-environment` entitlement), create the App
+Store Connect app record (no public API for that; App Store names are unique worldwide, so the
+record name can differ from the home-screen name), and an internal TestFlight group with access to
+all builds, so every processed build reaches its testers. `ITSAppUsesNonExemptEncryption=false` is
+already in the Info.plist, so builds need no export-compliance answer.
+
+Pitfalls:
+
+- `APP_VARIANT=jarvis3` must be set for every step. Xcode's "Bundle React Native code" phase
+  re-reads `app.config.js`; without it the app embeds upstream's config.
+- Build with Xcode 26. An app linked against the iOS 27 SDK must adopt the UIScene life cycle, and
+  Expo SDK 54's template doesn't.
+- Expo names the Xcode project after the app name (`Jarvis 3` -> `Jarvis3`); `prepare.sh` writes it
+  to `ios/.jarvis3-name` for the later steps.
 
 ## Staying on upstream
 

@@ -5,7 +5,9 @@
 // relays HTTP to the daemon the same way (bearer added, always a sandboxed download).
 //
 // Identity stands in for Cloudflare Access: the `CF_Authorization` cookie (or the
-// `Cf-Access-Authenticated-User-Email` header) is the user's email, unsigned. Never deploy this.
+// `Cf-Access-Authenticated-User-Email` header) is the user's email, unsigned, and an iOS build
+// pairs through `/api/devices/pair` (a mock sign-in page, then `CF-Access-Client-Id/Secret`).
+// Never deploy this.
 //
 // Standalone: node --import tsx e2e-jarvis3/mock-instance.ts --dist dist-jarvis3 --port 8090 \
 //   [--daemon ws://127.0.0.1:6768/ws --daemon-password …]
@@ -66,6 +68,8 @@ export interface MockInstanceOptions {
   newTaskDaemon?: MockDaemonTarget | null;
   /** userId -> that user's notices, newest first. */
   notices?: Record<string, NoticeView[]>;
+  /** The app scheme `/api/devices/pair` redirects to (the server's `devices.appScheme`). */
+  appScheme?: string;
 }
 
 export interface MockInstance {
@@ -143,6 +147,7 @@ function setOverride(previous: number | null, next: number | null | undefined): 
 
 export async function startMockInstance(options: MockInstanceOptions): Promise<MockInstance> {
   const users = options.users ?? DEFAULT_USERS;
+  const appScheme = options.appScheme ?? "jarvis3";
   const tasks: TaskView[] = (options.tasks ?? []).map((task) => Object.assign({}, task));
   const daemons: Record<string, MockDaemonTarget> = { ...options.daemons };
   const layers = new Map<string, StoredLayer>();
@@ -437,7 +442,17 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
 
   // ---- HTTP ----
 
+  // Device tokens minted by the mock's `/api/devices/pair` (clientId -> secret and user).
+  const deviceTokens = new Map<string, { secret: string; userId: string }>();
+
   function callerOf(req: IncomingMessage): MockUser | null {
+    const clientId = req.headers["cf-access-client-id"];
+    if (typeof clientId === "string") {
+      const device = deviceTokens.get(clientId);
+      const secret = req.headers["cf-access-client-secret"];
+      if (!device || device.secret !== secret) return null;
+      return users.find((user) => user.id === device.userId) ?? null;
+    }
     const header = req.headers["cf-access-authenticated-user-email"];
     const cookie = /(?:^|;\s*)CF_Authorization=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
     const fromCookie = cookie ? decodeURIComponent(cookie) : null;
@@ -463,6 +478,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     const method = req.method ?? "GET";
     requests.push(`${method} ${url.pathname}`);
     if (url.pathname === "/api/health") return send(res, 200, { ok: true, version: "mock" });
+    if (url.pathname === "/api/devices/pair") return pairDevice(req, res, url);
     const user = callerOf(req);
     if (!user) throw new HttpError(401, "unauthenticated", "no Access identity");
     for (const [routeMethod, pattern, handler] of routes) {
@@ -515,8 +531,61 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     res.end(Buffer.from(await upstream.arrayBuffer()));
   }
 
+  // ---- device pairing (iOS) ----
+  // `GET /api/devices/pair` the way the real server answers it (docs/API.md section 3), with a
+  // mock sign-in page standing in for the Cloudflare Access login: it lists the users, and a
+  // pick sets the identity cookie and returns to the pairing URL.
+
+  function pairDevice(req: IncomingMessage, res: ServerResponse, url: URL): void {
+    const state = url.searchParams.get("state") ?? "";
+    if (!/^[A-Za-z0-9_-]{16,64}$/.test(state)) throw new HttpError(400, "bad_request", "bad state");
+    const user = callerOf(req);
+    if (!user) {
+      res.writeHead(302, {
+        location: `/__mock/sign-in?return=${encodeURIComponent(url.pathname + url.search)}`,
+      });
+      res.end();
+      return;
+    }
+    const id = `dev-${deviceTokens.size + 1}`;
+    const clientId = `${id}.mock-access`;
+    const clientSecret = `secret-${Math.random().toString(36).slice(2)}`;
+    deviceTokens.set(clientId, { secret: clientSecret, userId: user.id });
+    const query = new URLSearchParams({ state, id, clientId, clientSecret });
+    res.writeHead(302, { location: `${appScheme}://paired?${query.toString()}` });
+    res.end();
+  }
+
+  function signInPage(res: ServerResponse, url: URL): void {
+    const back = url.searchParams.get("return") ?? "/";
+    const pick = url.searchParams.get("as");
+    if (pick && back.startsWith("/")) {
+      res.writeHead(302, {
+        location: back,
+        "set-cookie": `CF_Authorization=${encodeURIComponent(pick)}; Path=/; HttpOnly`,
+      });
+      res.end();
+      return;
+    }
+    const escape = (text: string) => text.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+    const links = users
+      .map((user) => {
+        const href = `/__mock/sign-in?${new URLSearchParams({ return: back, as: user.email })}`;
+        return `<p><a href="${escape(href)}" style="font-size:22px">Sign in as ${escape(user.email)}</a></p>`;
+      })
+      .join("");
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(
+      `<!doctype html><meta name="viewport" content="width=device-width"><title>Mock sign-in</title><body style="font-family:system-ui;padding:24px"><h1>Mock sign-in</h1>${links}</body>`,
+    );
+  }
+
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://mock");
+    if (url.pathname === "/__mock/sign-in") {
+      signInPage(res, url);
+      return;
+    }
     if (/^\/api\/tasks\/[^/]+\/daemon\/http\//.test(url.pathname)) {
       relayHttp(req, res, url).catch((error: unknown) => {
         const known =

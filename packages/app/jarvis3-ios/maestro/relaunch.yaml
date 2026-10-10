@@ -1,0 +1,11 @@
+# The device token survives a relaunch (Keychain): the task list loads without signing in.
+appId: ${APP_ID}
+---
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: "Draft the Q3 supplier summary"
+    timeout: 60000
+- assertNotVisible:
+    id: "jarvis3-sign-in"
+- takeScreenshot: 4-relaunched

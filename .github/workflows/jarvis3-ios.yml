@@ -1,0 +1,154 @@
+# The jarvis3 variant's iOS app (JARVIS3.md, "Shipping the iOS app"). Two jobs on GitHub macOS
+# runners, in parallel:
+# - simulator: a build pointed at the MOCK instance (http://localhost:8090), and Maestro walks the
+#   real pairing flow on a simulator. Its screenshots hold mock data only.
+# - testflight: a build pointed at the instance (secret JARVIS3_INSTANCE_URL), archived,
+#   cloud-signed with the App Store Connect API key and uploaded to TestFlight.
+# Nothing about the instance is committed: its URL is a secret, the bundle id and app name are
+# repository variables. Logs never print the URL (secrets are masked).
+name: jarvis3 iOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: "Upload to TestFlight"
+        type: boolean
+        default: true
+      simulator:
+        description: "Run the simulator test"
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - "packages/app/**"
+      - "packages/client/**"
+      - "packages/protocol/**"
+      - ".github/workflows/jarvis3-ios.yml"
+      - "package-lock.json"
+
+concurrency:
+  group: jarvis3-ios-${{ github.event_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+  # Every step, not just prebuild: Xcode's "Bundle React Native code" phase re-reads
+  # app.config.js and embeds that config in the app.
+  APP_VARIANT: jarvis3
+  JARVIS3_BUNDLE_ID: ${{ vars.JARVIS3_BUNDLE_ID }}
+  JARVIS3_APP_NAME: ${{ vars.JARVIS3_APP_NAME }}
+
+jobs:
+  simulator:
+    if: github.repository == 'DE0CH/jarvis3-app' && (github.event_name == 'push' || inputs.simulator)
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      JARVIS3_INSTANCE_URL: http://localhost:8090
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        # The iOS 26 SDK: an app linked against iOS 27's SDK must adopt the UIScene life cycle,
+        # which Expo SDK 54's template does not.
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app | grep -v -i beta | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Generate the iOS project
+        run: packages/app/jarvis3-ios/prepare.sh
+
+      - name: Build for the simulator
+        working-directory: packages/app/ios
+        run: |
+          set -o pipefail
+          NAME=$(cat .jarvis3-name)
+          xcodebuild -workspace "$NAME.xcworkspace" -scheme "$NAME" -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/sim CODE_SIGNING_ALLOWED=NO build | tail -n 40
+
+      - name: Simulator test (pairing against the mock instance)
+        timeout-minutes: 30
+        run: |
+          NAME=$(cat packages/app/ios/.jarvis3-name)
+          packages/app/jarvis3-ios/simulator-test.sh "packages/app/ios/build/sim/Build/Products/Release-iphonesimulator/$NAME.app"
+
+      - name: Keep the test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis3-ios-simulator
+          path: jarvis3-ios-test-output/
+          if-no-files-found: ignore
+
+  testflight:
+    if: github.repository == 'DE0CH/jarvis3-app' && (github.event_name == 'push' || inputs.upload)
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      JARVIS3_INSTANCE_URL: ${{ secrets.JARVIS3_INSTANCE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the configuration
+        run: |
+          missing=0
+          for v in JARVIS3_INSTANCE_URL JARVIS3_BUNDLE_ID JARVIS3_APP_NAME; do
+            [[ -n "${!v}" ]] || { echo "::error::$v is not set (repository secret/variable)"; missing=1; }
+          done
+          exit $missing
+
+      - name: Select Xcode 26
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app | grep -v -i beta | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Generate the iOS project
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+        run: packages/app/jarvis3-ios/prepare.sh
+
+      - name: Archive, sign and upload to TestFlight
+        working-directory: packages/app/ios
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -o pipefail
+          NAME=$(cat .jarvis3-name)
+          KEY="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
+          printf '%s\n' "$ASC_PRIVATE_KEY" > "$KEY"
+          trap 'rm -f "$KEY"' EXIT
+          AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$KEY" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          xcodebuild -workspace "$NAME.xcworkspace" -scheme "$NAME" -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            DEVELOPMENT_TEAM=S64YL394S3 CODE_SIGN_STYLE=Automatic "${AUTH[@]}" archive | tail -n 40
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            -exportOptionsPlist "$GITHUB_WORKSPACE/packages/app/jarvis3-ios/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" "${AUTH[@]}" | tail -n 40
