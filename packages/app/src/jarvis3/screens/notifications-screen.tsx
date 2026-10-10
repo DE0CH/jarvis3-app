@@ -84,7 +84,7 @@ function ThisDeviceSection({ device, busy }: { device: ThisDevice; busy: string 
       device.status === "on" ? (
         <StatusPill tone="ok" label="On" testID="jarvis3-push-status" />
       ) : (
-        <StatusPill tone="idle" label="Off" testID="jarvis3-push-status" />
+        <StatusPill tone="muted" label="Off" testID="jarvis3-push-status" />
       ),
     [device.status],
   );
