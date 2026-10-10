@@ -16,8 +16,27 @@ async function support(): Promise<PushSupport> {
   return "ready";
 }
 
+/** iOS asks Apple for the token; with no answer (a simulator on a CI virtual machine) it never settles. */
+const TOKEN_TIMEOUT_MS = 30_000;
+
+async function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(what)), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function tokenRequest(): Promise<CreatePushSubscriptionRequest> {
-  const token = await Notifications.getDevicePushTokenAsync();
+  const token = await withTimeout(
+    Notifications.getDevicePushTokenAsync(),
+    TOKEN_TIMEOUT_MS,
+    "no answer from Apple's push service",
+  );
   const label = `${Constants.deviceName ?? "iPhone"}`.slice(0, 80);
   return { kind: "apns", token: String(token.data), label };
 }
