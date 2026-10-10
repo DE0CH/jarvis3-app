@@ -1,7 +1,8 @@
 // A mock Jarvis 3 instance for the jarvis3 web e2e (and for local UI work): serves the jarvis3
 // web export at its origin, answers the instance API with the shapes of src/jarvis3/api-types.ts
 // (vendored from DE0CH/jarvis3), and relays `/api/tasks/:id/daemon` to a real Paseo daemon,
-// adding `paseo.bearer.<password>` the way the real server does.
+// adding `paseo.bearer.<password>` the way the real server does; `/api/tasks/:id/daemon/http/*`
+// relays HTTP to the daemon the same way (bearer added, always a sandboxed download).
 //
 // Identity stands in for Cloudflare Access: the `CF_Authorization` cookie (or the
 // `Cf-Access-Authenticated-User-Email` header) is the user's email, unsigned. Never deploy this.
@@ -17,7 +18,10 @@ import type {
   ApiError,
   CreateTaskRequest,
   ErrorCode,
+  MarkNoticesReadRequest,
+  MeView,
   ModelList,
+  NoticeView,
   PersonalLayerVersionView,
   PersonalLayerView,
   PersonalNote,
@@ -38,6 +42,8 @@ export interface MockUser {
 export interface MockDaemonTarget {
   url: string;
   password: string;
+  /** The task's own agent on that daemon (reported as TaskView.agentId once the task runs). */
+  agentId?: string;
 }
 
 type LayerContent = Omit<PersonalLayerView, "versions">;
@@ -58,12 +64,19 @@ export interface MockInstanceOptions {
   startDelayMs?: number;
   /** The daemon a newly created task's proxy reaches (none: it never connects). */
   newTaskDaemon?: MockDaemonTarget | null;
+  /** userId -> that user's notices, newest first. */
+  notices?: Record<string, NoticeView[]>;
 }
 
 export interface MockInstance {
   url: string;
   port: number;
-  state: { tasks: TaskView[]; layers: Map<string, StoredLayer>; requests: string[] };
+  state: {
+    tasks: TaskView[];
+    layers: Map<string, StoredLayer>;
+    requests: string[];
+    notices: Map<string, NoticeView[]>;
+  };
   close(): Promise<void>;
 }
 
@@ -135,6 +148,17 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   const layers = new Map<string, StoredLayer>();
   const limits = new Map<string, { usd: number | null; hours: number | null }>();
   const requests: string[] = [];
+  const notices = new Map<string, NoticeView[]>(
+    Object.entries(options.notices ?? {}).map(([userId, list]) => [
+      userId,
+      list.map((notice) => Object.assign({}, notice)),
+    ]),
+  );
+  const noticesOf = (userId: string): NoticeView[] => notices.get(userId) ?? [];
+  const meOf = (user: MockUser): MeView => ({
+    ...detailOf(user),
+    unreadNotices: noticesOf(user.id).filter((notice) => !notice.read).length,
+  });
   const created = new Map<string, string>(); // `${userId}:${requestId}` -> task id
   const startDelay = options.startDelayMs ?? 1500;
   let counter = 0;
@@ -175,7 +199,13 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     Object.assign(task, patch, { updatedAt: now() });
   const startLater = (task: TaskView) =>
     setTimeout(
-      () => touch(task, { state: "running", busy: null, connected: Boolean(daemons[task.id]) }),
+      () =>
+        touch(task, {
+          state: "running",
+          busy: null,
+          connected: Boolean(daemons[task.id]),
+          agentId: daemons[task.id]?.agentId ?? task.agentId,
+        }),
       startDelay,
     );
   const ownTask = (user: MockUser, id: string): TaskView => {
@@ -237,6 +267,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       createdAt: now(),
       updatedAt: now(),
       connected: false,
+      agentId: null,
     };
     tasks.unshift(task);
     if (request.requestId) created.set(key, task.id);
@@ -328,9 +359,21 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
 
   const ID = "([^/]+)";
   const routes: Route[] = [
-    ["GET", /^\/api\/me$/, ({ user }) => [200, detailOf(user)]],
+    ["GET", /^\/api\/me$/, ({ user }) => [200, meOf(user)]],
     ["GET", /^\/api\/models$/, () => [200, MODELS]],
-    ["GET", /^\/api\/notices$/, () => [200, { notices: [] }]],
+    ["GET", /^\/api\/notices$/, ({ user }) => [200, { notices: noticesOf(user.id) }]],
+    [
+      "POST",
+      /^\/api\/notices\/read$/,
+      async ({ user, body }) => {
+        const { upTo } = (await body()) as MarkNoticesReadRequest;
+        const list = noticesOf(user.id);
+        const from = upTo === undefined ? 0 : list.findIndex((notice) => notice.id === upTo);
+        if (from < 0) throw new HttpError(404, "not_found", "no such notice");
+        for (const notice of list.slice(from)) notice.read = true;
+        return [200, { unreadNotices: meOf(user).unreadNotices }];
+      },
+    ],
     [
       "GET",
       /^\/api\/tasks$/,
@@ -445,8 +488,43 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     createReadStream(file).pipe(res);
   }
 
+  // The HTTP relay: the same checks as the daemon socket, the daemon password added, and only a
+  // few headers back, always as a sandboxed download (like the real server).
+  async function relayHttp(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const match = /^\/api\/tasks\/([^/]+)\/daemon\/http(\/.*)$/.exec(url.pathname);
+    if (!match) throw new HttpError(404, "not_found", "not found");
+    requests.push(`${req.method ?? "GET"} ${url.pathname}`);
+    const target = upgradeTarget(req, `/api/tasks/${match[1]}/daemon`);
+    if (target === 401) throw new HttpError(401, "unauthenticated", "no Access identity");
+    if (target === 503) throw new HttpError(503, "unavailable", "the task isn't connected");
+    if (typeof target === "number") throw new HttpError(404, "not_found", "no such task");
+    const base = new URL(target.url.replace(/^ws/, "http"));
+    const upstream = await fetch(`${base.origin}${match[2]}${url.search}`, {
+      method: req.method,
+      headers: { authorization: `Bearer ${target.password}` },
+    });
+    const headers: Record<string, string> = {
+      "content-disposition": "attachment",
+      "content-security-policy": "sandbox; default-src 'none'",
+      "x-content-type-options": "nosniff",
+      "cache-control": "no-store",
+    };
+    const type = upstream.headers.get("content-type");
+    if (type) headers["content-type"] = type;
+    res.writeHead(upstream.status, headers);
+    res.end(Buffer.from(await upstream.arrayBuffer()));
+  }
+
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://mock");
+    if (/^\/api\/tasks\/[^/]+\/daemon\/http\//.test(url.pathname)) {
+      relayHttp(req, res, url).catch((error: unknown) => {
+        const known =
+          error instanceof HttpError ? error : new HttpError(502, "upstream", String(error));
+        send(res, known.status, { error: { code: known.code, message: known.message } });
+      });
+      return;
+    }
     if (!url.pathname.startsWith("/api/")) {
       serveStatic(res, url);
       return;
@@ -522,7 +600,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   return {
     url: `http://127.0.0.1:${port}`,
     port,
-    state: { tasks, layers, requests },
+    state: { tasks, layers, requests, notices },
     close: () =>
       new Promise<void>((resolve) => {
         for (const client of wss.clients) client.terminate();
@@ -560,6 +638,7 @@ async function main(): Promise<void> {
         createdAt: t,
         updatedAt: t,
         connected: Boolean(daemon),
+        agentId: null,
       },
     ],
     daemons: daemon ? { demo0000000001: daemon } : {},

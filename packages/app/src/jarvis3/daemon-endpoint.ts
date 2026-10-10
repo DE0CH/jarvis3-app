@@ -68,3 +68,20 @@ export function isTaskDaemonUrl(instanceUrl: string, url: string): boolean {
     return false;
   }
 }
+
+/**
+ * The instance's HTTP relay to a task's daemon for `pathAndQuery` (which starts with "/"):
+ * `https://<instance>/api/tasks/<id>/daemon/http<pathAndQuery>`. null for an ordinary endpoint.
+ * Paseo fetches file downloads over the daemon's HTTP; the relay adds the daemon password.
+ */
+export function jarvis3DaemonHttpUrl(endpoint: string, pathAndQuery: string): string | null {
+  const taskId = taskIdFromEndpoint(endpoint);
+  if (!taskId) return null;
+  if (!pathAndQuery.startsWith("/"))
+    throw new Error(`Daemon path must start with "/": ${pathAndQuery}`);
+  const instanceUrl = instanceUrlResolver?.();
+  if (!instanceUrl)
+    throw new Error("This host belongs to a Jarvis 3 instance this app isn't set up for.");
+  const base = new URL(instanceUrl);
+  return `${base.protocol}//${base.host}/api/tasks/${encodeURIComponent(taskId)}/daemon/http${pathAndQuery}`;
+}

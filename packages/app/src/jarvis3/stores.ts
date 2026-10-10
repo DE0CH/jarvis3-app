@@ -3,12 +3,19 @@
 import type { Jarvis3Api } from "./api";
 import type {
   CreateTaskRequest,
+  MeView,
   ModelList,
+  NoticeView,
   PersonalLayerView,
   TaskView,
-  UserDetail,
 } from "./api-types";
-import { Jarvis3Error, mergeTask, taskListNeedsRefresh } from "./plan";
+import {
+  Jarvis3Error,
+  mergeTask,
+  type SignOutReason,
+  signOutReason,
+  taskListNeedsRefresh,
+} from "./plan";
 
 export interface Store<T> {
   get(): T;
@@ -159,21 +166,49 @@ export type TasksStore = ReturnType<typeof createTasksStore>;
 
 export interface AccountState {
   loaded: boolean;
-  me: UserDetail | null;
+  me: MeView | null;
   models: ModelList | null;
   error: string | null;
   signedOut: boolean;
+  /** Why the instance refused this app (only when signedOut). */
+  signOutReason: SignOutReason | null;
 }
 
-export function createAccountStore(api: Jarvis3Api) {
+/** How often the unread notice count is refreshed while a Jarvis screen is open. */
+export const REFRESH_ME_MS = 60_000;
+
+export function createAccountStore(api: Jarvis3Api, timers?: Timers) {
   const state = createState<AccountState>({
     loaded: false,
     me: null,
     models: null,
     error: null,
     signedOut: false,
+    signOutReason: null,
   });
   let inflight: Promise<void> | null = null;
+  let watchers = 0;
+  let timer: unknown = null;
+  const refusal = (error: unknown) => {
+    const reason = signOutReason(error);
+    return { signedOut: reason !== null, signOutReason: reason };
+  };
+  const schedule = () => {
+    if (!timers || watchers === 0 || timer !== null) return;
+    timer = timers.setTimeout(() => {
+      timer = null;
+      void refreshMe().finally(schedule);
+    }, REFRESH_ME_MS);
+  };
+  async function refreshMe(): Promise<void> {
+    try {
+      const me = await api.me();
+      state.set({ me });
+    } catch (error) {
+      const refused = refusal(error);
+      if (refused.signedOut) state.set({ ...refused, error: messageOf(error) });
+    }
+  }
   return {
     get: state.get,
     subscribe: state.subscribe,
@@ -183,17 +218,38 @@ export function createAccountStore(api: Jarvis3Api) {
       inflight = (async () => {
         try {
           const [me, models] = await Promise.all([api.me(), api.models()]);
-          state.set({ loaded: true, me, models, error: null, signedOut: false });
+          state.set({
+            loaded: true,
+            me,
+            models,
+            error: null,
+            signedOut: false,
+            signOutReason: null,
+          });
         } catch (error) {
-          const signedOut =
-            error instanceof Jarvis3Error &&
-            (error.code === "signed_out" || error.code === "forbidden");
-          state.set({ loaded: true, error: messageOf(error), signedOut });
+          state.set({ loaded: true, error: messageOf(error), ...refusal(error) });
         } finally {
           inflight = null;
         }
       })();
       return inflight;
+    },
+    /** Keep `me` (the unread notice count) fresh while something shows it. Returns the stop. */
+    watch(): () => void {
+      watchers += 1;
+      schedule();
+      return () => {
+        watchers -= 1;
+        if (watchers === 0 && timer !== null) {
+          timers?.clearTimeout(timer);
+          timer = null;
+        }
+      };
+    },
+    refreshMe,
+    setUnread(unreadNotices: number) {
+      const me = state.get().me;
+      if (me && me.unreadNotices !== unreadNotices) state.set({ me: { ...me, unreadNotices } });
     },
   };
 }
@@ -277,3 +333,35 @@ export function createLayerStore(api: Jarvis3Api) {
 }
 
 export type LayerStore = ReturnType<typeof createLayerStore>;
+
+// ---- notices --------------------------------------------------------------------------------
+
+export interface NoticesState {
+  loaded: boolean;
+  notices: NoticeView[];
+  error: string | null;
+}
+
+/** The notices screen: loading the list marks it read up to the newest one shown. */
+export function createNoticesStore(api: Jarvis3Api, account: Pick<AccountStore, "setUnread">) {
+  const state = createState<NoticesState>({ loaded: false, notices: [], error: null });
+  return {
+    get: state.get,
+    subscribe: state.subscribe,
+    async load(): Promise<void> {
+      try {
+        const { notices } = await api.notices();
+        state.set({ loaded: true, notices, error: null });
+        const newest = notices[0];
+        if (newest && notices.some((notice) => !notice.read)) {
+          const { unreadNotices } = await api.markNoticesRead(newest.id);
+          account.setUnread(unreadNotices);
+        } else if (!newest) account.setUnread(0);
+      } catch (error) {
+        state.set({ loaded: true, error: messageOf(error) });
+      }
+    },
+  };
+}
+
+export type NoticesStore = ReturnType<typeof createNoticesStore>;

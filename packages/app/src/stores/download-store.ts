@@ -4,6 +4,7 @@ import * as LegacyFileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import type { HostProfile } from "@/types/host-connection";
 import { buildDaemonWebSocketUrl } from "@/utils/daemon-endpoints";
+import { jarvis3DownloadRequest } from "@/jarvis3/download-hook";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { isWeb } from "@/constants/platform";
 import { i18n } from "@/i18n/i18next";
@@ -95,11 +96,14 @@ export const useDownloadStore = create<DownloadState>()((set, get) => ({
       }
 
       const resolvedFileName = tokenResponse.fileName ?? fileName;
-      const downloadUrl = buildDownloadUrl(
-        downloadTarget.baseUrl,
-        tokenResponse.token,
-        isWeb ? downloadTarget.authCredentials : null,
-      );
+      const jarvis3Request = jarvis3DownloadRequest(daemonProfile, tokenResponse.token);
+      const downloadUrl =
+        jarvis3Request?.url ??
+        buildDownloadUrl(
+          downloadTarget.baseUrl,
+          tokenResponse.token,
+          isWeb ? downloadTarget.authCredentials : null,
+        );
 
       if (isWeb) {
         triggerBrowserDownload(downloadUrl, resolvedFileName);
@@ -112,9 +116,9 @@ export const useDownloadStore = create<DownloadState>()((set, get) => ({
       const downloadResumable = LegacyFileSystem.createDownloadResumable(
         downloadUrl,
         targetFile.uri,
-        downloadTarget.authHeader
-          ? { headers: { Authorization: downloadTarget.authHeader } }
-          : undefined,
+        jarvis3Request
+          ? { headers: jarvis3Request.headers ?? {} }
+          : nativeDownloadOptions(downloadTarget.authHeader),
         (data) => {
           const now = Date.now();
           const { totalBytesWritten, totalBytesExpectedToWrite } = data;
@@ -283,6 +287,10 @@ function resolveDaemonDownloadTarget(daemon?: HostProfile): DownloadTarget {
     : null;
 
   return { baseUrl, authHeader, authCredentials };
+}
+
+function nativeDownloadOptions(authHeader: string | null) {
+  return authHeader ? { headers: { Authorization: authHeader } } : undefined;
 }
 
 function buildDownloadUrl(

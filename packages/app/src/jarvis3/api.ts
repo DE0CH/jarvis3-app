@@ -4,6 +4,9 @@
 import type {
   AddNoteRequest,
   CreateTaskRequest,
+  MarkNoticesReadRequest,
+  MarkNoticesReadResult,
+  MeView,
   ModelList,
   NoticeList,
   PersonalLayerView,
@@ -74,9 +77,16 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
   const me = "/api/users/me";
 
   return {
-    me: () => call<UserDetail>("GET", "/api/me"),
+    me: () => call<MeView>("GET", "/api/me"),
     models: () => call<ModelList>("GET", "/api/models"),
     notices: () => call<NoticeList>("GET", "/api/notices"),
+    /** Marks the caller's notices read: all, or up to (and including) notice `upTo`. */
+    markNoticesRead: (upTo?: string) =>
+      call<MarkNoticesReadResult>(
+        "POST",
+        "/api/notices/read",
+        (upTo ? { upTo } : {}) satisfies MarkNoticesReadRequest,
+      ),
 
     listTasks: () => call<TaskList>("GET", "/api/tasks"),
     getTask: (taskId: string) => call<TaskView>("GET", `/api/tasks/${id(taskId)}`),

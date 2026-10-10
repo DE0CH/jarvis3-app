@@ -18,13 +18,14 @@ variant builds plain Paseo, unchanged.
 
 ## What the variant is
 
-| Screen                   | Route          | What it does                                                                                                                                                                                                                      |
-| ------------------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tasks                    | `/tasks`       | The user's own tasks (`GET /api/tasks`): title and state; **Start** for a paused task (`POST …/resume`), Pause, Delete (a centered confirmation dialog). Refreshes every 3 s while a task changes state.                          |
-| New task                 | `/tasks/new`   | The first message and a model from the instance's curated list (`GET /api/models`); `POST /api/tasks` with a `requestId`, so a double press makes one task.                                                                       |
-| Task                     | `/tasks/:id`   | Paseo's own chat panel (`AgentConversationPanel`) for the task's agent, on the task's host, without the workspace chrome. Before that: Starting…, Paused (with Start), Connecting…, or "doesn't exist, or isn't yours" for a 404. |
-| My instructions & skills | `/me/layer`    | The personal layer: instructions, skills (SKILL.md editor), notes; delete; **Reset to company default** (centered dialog) with **Undo**. Every change says it applies from the next task.                                         |
-| Users (admins only)      | `/admin/users` | Each user's monthly model-spend and machine-hour limits and use; set or clear a per-user override (`PATCH /api/users/:id/limits`).                                                                                                |
+| Screen                   | Route          | What it does                                                                                                                                                                                                                                   |
+| ------------------------ | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tasks                    | `/tasks`       | The user's own tasks (`GET /api/tasks`): title and state; **Start** for a paused task (`POST …/resume`), Pause, Delete (a centered confirmation dialog). Refreshes every 3 s while a task changes state.                                       |
+| New task                 | `/tasks/new`   | The first message and a model from the instance's curated list (`GET /api/models`); `POST /api/tasks` with a `requestId`, so a double press makes one task.                                                                                    |
+| Task                     | `/tasks/:id`   | Paseo's own chat panel (`AgentConversationPanel`) for the task's agent, on the task's host, without the workspace chrome. Before that: Starting…, Paused (with Start), Connecting…, or "doesn't exist, or isn't yours" for a 404.              |
+| My instructions & skills | `/me/layer`    | The personal layer: instructions, skills (SKILL.md editor), notes; delete; **Reset to company default** (centered dialog) with **Undo**. Every change says it applies from the next task.                                                      |
+| Notices                  | `/notices`     | The instance's notices (a cap or the budget paused a task, a task failed, access removed), newest first; opening the screen marks them read. The navigation shows the unread count (`unreadNotices` in `GET /api/me`, refreshed every minute). |
+| Users (admins only)      | `/admin/users` | Each user's monthly model-spend and machine-hour limits and use; set or clear a per-user override (`PATCH /api/users/:id/limits`).                                                                                                             |
 
 Hidden in this variant: everything of Paseo's host model. The app opens on `/tasks`, never on the
 welcome/pairing screen, and never auto-adds a `localhost:6767` daemon. Task routes don't mount
@@ -51,6 +52,11 @@ SettingsTextAreaCard, ScrollView); questions are a centered `Modal` dialog, neve
 - The serverId is the daemon's own. The app learns it when the task is first opened, by probing
   through the proxy (`HostRuntimeStore.probeAndUpsertConnection`). A paused task keeps its host,
   because a resumed daemon keeps its id. The task list removes the hosts of deleted tasks.
+- The chat shows the task's own agent: the id the session reports (`TaskView.agentId`), once the
+  task's host has that agent. Until then the screen says it is waiting for the agent.
+- File downloads go through the instance's HTTP relay to the daemon
+  (`/api/tasks/<id>/daemon/http/api/files/download?token=…`, `src/jarvis3/download-hook.ts`);
+  the instance adds the daemon password and always answers as a download.
 - The embedded chat does what the workspace screen does for visible agents: it prepares the agent's
   timeline and marks the agent viewed and focused. Without that the panel stays on its spinner.
 - **Auth.** On the web, the page is on the instance's origin, so the browser's Cloudflare Access
@@ -61,19 +67,22 @@ SettingsTextAreaCard, ScrollView); questions are a centered `Modal` dialog, neve
   `GET <instance>/api/devices/pair?state&name&model` in the system sign-in sheet
   (`expo-web-browser`). The instance redirects to `<scheme>://paired?…`, and the token is kept in
   the Keychain (`expo-secure-store`). A token is refused for about 30 s after it's minted
-  (Cloudflare propagation), and the app retries during that window. A later refusal means the
-  device was revoked, so the app forgets the token. A CI simulator run can pass a token as the
+  (Cloudflare propagation), and the app retries during that window. The instance answers 403
+  `device_revoked` for a token revoked while its user is still active: the app forgets it at once
+  and says so on the sign-in screen. A 403 `forbidden` means the account itself has no access
+  (suspended or removed); the app forgets the token after the grace period and says that instead. A CI simulator run can pass a token as the
   launch arguments `-jarvis3E2EClientId … -jarvis3E2EClientSecret …`.
 
 ## Code
 
 - `api-types.ts`: vendored from jarvis3 (type-only). Refresh it with `scripts/jarvis3-sync-api-types.sh`.
-- `plan.ts`: pure decisions (task states and actions, the chat screen's phase, which agent is the
-  task's, error messages, pairing redirect, skill validation, limit input).
+- `plan.ts`: pure decisions (task states and actions, the chat screen's phase, the task's agent,
+  error messages and sign-out reasons, pairing redirect, skill validation, limit input, the
+  notices label).
 - `api.ts`: the API client (fetch, base URL and credentials injected). `stores.ts`: the tasks,
-  account and personal-layer stores. Both are unit-tested with fakes.
-- `daemon-endpoint.ts`, `ws-hook.ts`, `device-token.ts`, `config.ts`: the pieces that upstream
-  modules import. None of them pulls in native modules beyond `expo-constants`.
+  account (with the unread count), personal-layer and notices stores. Both are unit-tested with fakes.
+- `daemon-endpoint.ts`, `ws-hook.ts`, `download-hook.ts`, `device-token.ts`, `config.ts`: the
+  pieces that upstream modules import. None of them pulls in native modules beyond `expo-constants`.
 - `device.ts`, `client.ts`, `hooks.ts`, `gate.tsx`, `ui.tsx`, `task-host.ts`, `index-route.tsx`,
   `screens/*`: the variant's runtime and screens.
 
@@ -90,6 +99,7 @@ SettingsTextAreaCard, ScrollView); questions are a centered `Modal` dialog, neve
 | `src/runtime/host-runtime.ts` (`runBoot`)           | `isJarvis3` added to the desktop-daemon check                                                                                                                                 | never auto-add a `localhost:6767` daemon as a host                                                                                                       |
 | `src/utils/test-daemon-connection.ts`               | the same URL hook, for the probe                                                                                                                                              | the probe that learns the serverId                                                                                                                       |
 | `src/runtime/websocket-factory.ts` (native)         | `withJarvis3Headers(nativeWebSocketFactory)`                                                                                                                                  | the device token on the daemon socket (iOS)                                                                                                              |
+| `src/stores/download-store.ts`                      | `jarvis3DownloadRequest(daemonProfile, token)?.url ?? buildDownloadUrl(…)`, and its headers for the native download                                                           | a task host's daemon HTTP is reached through the instance's relay; iOS sends the device token                                                            |
 | `src/composer/index.tsx`                            | `showAgentControls: mode.showAgentControls && !isJarvis3`                                                                                                                     | no model/mode/thinking pickers in the chat                                                                                                               |
 
 Every hook is inert in other variants: `isJarvis3` is false, and no endpoint ends in `.jarvis3.invalid`.
@@ -109,11 +119,12 @@ npm run test:e2e:jarvis3                                  # Playwright vs the mo
 
 The e2e (`packages/app/e2e-jarvis3/`, outside `e2e/`, where upstream's CI contract wants only its
 own browser suite) serves `dist-jarvis3` from a mock instance (`mock-instance.ts`) whose API has the
-shapes of `api-types.ts`. Its daemon proxy reaches a real Paseo daemon (`daemon.ts`: dev supervisor,
+shapes of `api-types.ts`. Its daemon proxy (WebSocket and HTTP) reaches a real Paseo daemon (`daemon.ts`: dev supervisor,
 mock provider, a daemon password, one seeded agent). Identity is mocked with the cookie
 `CF_Authorization=<email>`. It covers the list, New task, opening the chat and sending a message,
 Start for a paused task, the personal layer's edit/Reset/Undo, another user's task (404, and its
-socket is refused), and the admin users page. It saves phone (390) and desktop (1440) screenshots in
+socket and HTTP relay are refused), the notices screen with the unread count, the HTTP relay to
+the daemon, and the admin users page. It saves phone (390) and desktop (1440) screenshots in
 light and dark to `JARVIS3_SCREENSHOT_DIR` (CI: the `jarvis3-screenshots` artifact).
 
 Paseo's layout remounts the route when the window crosses its compact/desktop breakpoint, so

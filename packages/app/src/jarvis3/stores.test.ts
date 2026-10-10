@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { createJarvis3Api, type Jarvis3Api } from "./api";
-import type { PersonalLayerView, TaskView } from "./api-types";
+import type { MeView, NoticeView, PersonalLayerView, TaskView } from "./api-types";
 import { Jarvis3Error } from "./plan";
 import {
   APPLIES_NEXT_TASK,
   createAccountStore,
   createLayerStore,
+  createNoticesStore,
   createTasksStore,
+  REFRESH_ME_MS,
   REFRESH_WHILE_CHANGING_MS,
   type Timers,
 } from "./stores";
@@ -24,6 +26,7 @@ function task(patch: Partial<TaskView> = {}): TaskView {
     createdAt: "2026-10-08T12:00:00.000Z",
     updatedAt: "2026-10-08T12:00:00.000Z",
     connected: true,
+    agentId: null,
     ...patch,
   };
 }
@@ -224,6 +227,106 @@ describe("account store", () => {
     );
     await store.load();
     expect(store.get()).toMatchObject({ loaded: true, signedOut: true });
+  });
+});
+
+function me(unreadNotices: number): MeView {
+  return {
+    user: {
+      id: "u1",
+      email: "a@example.org",
+      name: "A",
+      role: "staff",
+      status: "active",
+      isAdmin: false,
+      createdAt: "t",
+    },
+    limits: {
+      openrouterMonthlyUsd: 20,
+      openrouterOverride: false,
+      machineHoursPerMonth: 10,
+      machineHoursOverride: false,
+    },
+    usage: {
+      month: "2026-10",
+      machineHours: 0,
+      machineHoursCapReached: false,
+      openrouterKey: true,
+    },
+    unreadNotices,
+  };
+}
+
+describe("account store: why access was refused, and the unread count", () => {
+  it("tells a revoked device apart", async () => {
+    const store = createAccountStore(
+      fakeApi({
+        me: async () => {
+          throw new Jarvis3Error("revoked", 403, "device_revoked");
+        },
+        models: async () => ({ models: [], default: "" }),
+      }),
+    );
+    await store.load();
+    expect(store.get()).toMatchObject({ signedOut: true, signOutReason: "revoked" });
+  });
+  it("refreshes me while watched, and stops when nothing watches", async () => {
+    let unread = 1;
+    const { timers, pending } = fakeTimers();
+    const store = createAccountStore(
+      fakeApi({ me: async () => me(unread), models: async () => ({ models: [], default: "" }) }),
+      timers,
+    );
+    await store.load();
+    expect(store.get().me?.unreadNotices).toBe(1);
+    const stop = store.watch();
+    expect(pending.map((p) => p.ms)).toEqual([REFRESH_ME_MS]);
+    unread = 4;
+    pending.shift()!.fn();
+    await vi.waitFor(() => expect(store.get().me?.unreadNotices).toBe(4));
+    await vi.waitFor(() => expect(pending.length).toBe(1), { timeout: 1000 });
+    stop();
+    expect(pending.length).toBe(0);
+    store.setUnread(0);
+    expect(store.get().me?.unreadNotices).toBe(0);
+  });
+});
+
+describe("notices store", () => {
+  const notice = (id: string, read: boolean): NoticeView => ({
+    id,
+    kind: "task_failed",
+    text: id,
+    taskId: null,
+    createdAt: "2026-10-08T12:00:00.000Z",
+    read,
+  });
+  it("loads the list and marks it read up to the newest notice", async () => {
+    const markNoticesRead = vi.fn(async () => ({ unreadNotices: 0 }));
+    const setUnread = vi.fn();
+    const store = createNoticesStore(
+      fakeApi({
+        notices: async () => ({ notices: [notice("n2", false), notice("n1", true)] }),
+        markNoticesRead,
+      }),
+      { setUnread },
+    );
+    await store.load();
+    expect(store.get().notices.map((n) => n.id)).toEqual(["n2", "n1"]);
+    expect(store.get().notices[0]?.read).toBe(false);
+    expect(markNoticesRead).toHaveBeenCalledWith("n2");
+    expect(setUnread).toHaveBeenCalledWith(0);
+  });
+  it("doesn't mark anything when all are read", async () => {
+    const markNoticesRead = vi.fn(async () => ({ unreadNotices: 0 }));
+    const store = createNoticesStore(
+      fakeApi({ notices: async () => ({ notices: [notice("n1", true)] }), markNoticesRead }),
+      {
+        setUnread: vi.fn(),
+      },
+    );
+    await store.load();
+    expect(markNoticesRead).not.toHaveBeenCalled();
   });
 });
 

@@ -12,10 +12,13 @@ import {
   pairErrorMessage,
   parseLimitInput,
   parsePairRedirect,
-  pickTaskAgent,
+  noticesLabel,
   planTaskChat,
   presentTask,
   resolveInstanceUrl,
+  signOutMessage,
+  signOutReason,
+  taskAgentOnHost,
   taskListNeedsRefresh,
   validateSkill,
 } from "./plan";
@@ -33,6 +36,7 @@ function task(patch: Partial<TaskView> = {}): TaskView {
     createdAt: "2026-10-08T12:00:00.000Z",
     updatedAt: "2026-10-08T12:00:00.000Z",
     connected: true,
+    agentId: null,
     ...patch,
   };
 }
@@ -121,27 +125,14 @@ describe("task list", () => {
   });
 });
 
-describe("pickTaskAgent", () => {
-  it("picks the oldest live top-level agent", () => {
-    expect(
-      pickTaskAgent([
-        { id: "sub", createdAt: "2026-10-08T12:00:00Z", parentAgentId: "main" },
-        { id: "later", createdAt: "2026-10-08T12:05:00Z", parentAgentId: null },
-        { id: "main", createdAt: "2026-10-08T11:59:00Z", parentAgentId: null },
-      ]),
-    ).toBe("main");
+describe("taskAgentOnHost", () => {
+  it("is the agent the session reported, once the host has it", () => {
+    expect(taskAgentOnHost(task({ agentId: "main" }), ["helper", "main"])).toBe("main");
   });
-  it("skips archived agents and is null without any", () => {
-    expect(pickTaskAgent([{ id: "a", archivedAt: "2026-10-08T12:00:00Z" }])).toBeNull();
-    expect(pickTaskAgent([])).toBeNull();
-  });
-  it("accepts Date values", () => {
-    expect(
-      pickTaskAgent([
-        { id: "b", createdAt: new Date("2026-10-08T12:01:00Z") },
-        { id: "a", createdAt: new Date("2026-10-08T12:00:00Z") },
-      ]),
-    ).toBe("a");
+  it("never guesses: null without a reported id, or while the host lacks it", () => {
+    expect(taskAgentOnHost(task({ agentId: null }), ["helper", "main"])).toBeNull();
+    expect(taskAgentOnHost(task({ agentId: "main" }), ["helper"])).toBeNull();
+    expect(taskAgentOnHost(null, ["main"])).toBeNull();
   });
 });
 
@@ -289,5 +280,39 @@ describe("admin limits", () => {
     expect(formatLimit(null, "usd")).toBe("No limit");
     expect(formatLimit(20, "usd")).toBe("USD 20.00");
     expect(formatLimit(10, "hours")).toBe("10 h");
+  });
+});
+
+describe("signing out", () => {
+  it("tells a revoked device from an account without access", () => {
+    expect(
+      signOutReason(errorFromResponse(403, { error: { code: "device_revoked", message: "x" } })),
+    ).toBe("revoked");
+    expect(
+      signOutReason(errorFromResponse(403, { error: { code: "forbidden", message: "x" } })),
+    ).toBe("no_access");
+    expect(signOutReason(new Jarvis3Error("You're signed out.", 401, "signed_out"))).toBe(
+      "signed_out",
+    );
+    expect(
+      signOutReason(errorFromResponse(401, { error: { code: "unauthenticated", message: "x" } })),
+    ).toBe("signed_out");
+    expect(signOutReason(errorFromResponse(404, null))).toBeNull();
+    expect(signOutReason(new Error("boom"))).toBeNull();
+  });
+  it("says what to do", () => {
+    expect(signOutMessage("revoked")).toMatch(/Sign in again/);
+    expect(signOutMessage("no_access")).toMatch(/admin/);
+    expect(
+      errorFromResponse(403, { error: { code: "device_revoked", message: "x" } }).message,
+    ).toBe("This device was signed out. Sign in again.");
+  });
+});
+
+describe("noticesLabel", () => {
+  it("shows the unread count only when there is one", () => {
+    expect(noticesLabel(0)).toBe("Notices");
+    expect(noticesLabel(3)).toBe("Notices (3)");
+    expect(noticesLabel(250)).toBe("Notices (99+)");
   });
 });

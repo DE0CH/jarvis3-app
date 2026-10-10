@@ -129,32 +129,16 @@ export function mergeTask(tasks: readonly TaskView[], task: TaskView): TaskView[
 
 // ---- the task's chat --------------------------------------------------------------------
 
-export interface DaemonAgentSummary {
-  id: string;
-  createdAt?: string | Date | null;
-  lastActivityAt?: string | Date | null;
-  archivedAt?: string | Date | null;
-  parentAgentId?: string | null;
-}
-
-function toTime(value: string | Date | null | undefined): number {
-  if (!value) return 0;
-  const time = value instanceof Date ? value.getTime() : Date.parse(value);
-  return Number.isFinite(time) ? time : 0;
-}
-
 /**
- * The agent a task's chat shows: the session starts one top-level agent with the first prompt;
- * if there are several, the oldest top-level one that is not archived (the task's own), else the
- * newest of any.
+ * The agent a task's chat shows: the one the session reported as the task's own
+ * (`TaskView.agentId`), once the task's host has it. null while either is missing.
  */
-export function pickTaskAgent(agents: readonly DaemonAgentSummary[]): string | null {
-  const live = agents.filter((agent) => !agent.archivedAt);
-  const topLevel = live.filter((agent) => !agent.parentAgentId);
-  const pool = topLevel.length > 0 ? topLevel : live;
-  if (pool.length === 0) return null;
-  const sorted = pool.slice().sort((a, b) => toTime(a.createdAt) - toTime(b.createdAt));
-  return sorted[0]?.id ?? null;
+export function taskAgentOnHost(
+  task: Pick<TaskView, "agentId"> | null,
+  hostAgentIds: readonly string[],
+): string | null {
+  const id = task?.agentId ?? null;
+  return id && hostAgentIds.includes(id) ? id : null;
 }
 
 // ---- errors -----------------------------------------------------------------------------
@@ -178,6 +162,7 @@ const FRIENDLY: Partial<Record<ErrorCode, string>> = {
   upstream: "A provider didn't answer. Try again shortly.",
   unavailable: "The task isn't connected yet.",
   forbidden: "This account has no access to this instance.",
+  device_revoked: "This device was signed out. Sign in again.",
   unauthenticated: "You're signed out.",
 };
 
@@ -361,7 +346,7 @@ export type ChatPhase =
 /**
  * What the task screen shows. `hostServerId` is the Paseo host already made for this task
  * (null until the app has probed the daemon through the proxy), `hostOnline` its connection,
- * `agentId` the agent picked from that host (pickTaskAgent).
+ * `agentId` the task's agent once that host has it (taskAgentOnHost).
  */
 export function planTaskChat(input: {
   task: TaskView | null;
@@ -395,4 +380,38 @@ export function planTaskChat(input: {
       if (!input.agentId) return { kind: "waiting_agent" };
       return { kind: "chat", serverId: input.hostServerId, agentId: input.agentId };
   }
+}
+
+// ---- signed out ---------------------------------------------------------------------------
+
+/**
+ * Why the app has no access, from the error that refused it: `revoked` (this device's token was
+ * revoked; pair again), `no_access` (the account itself is suspended, removed or unknown) or
+ * `signed_out` (no or an expired login). null when the error isn't a refusal.
+ */
+export type SignOutReason = "revoked" | "no_access" | "signed_out";
+
+export function signOutReason(error: unknown): SignOutReason | null {
+  if (!(error instanceof Jarvis3Error)) return null;
+  if (error.code === "device_revoked") return "revoked";
+  if (error.code === "forbidden") return "no_access";
+  if (error.code === "signed_out" || error.code === "unauthenticated") return "signed_out";
+  return null;
+}
+
+const SIGN_OUT_MESSAGE: Record<SignOutReason, string> = {
+  revoked: "This device was signed out of the instance. Sign in again to use it.",
+  no_access: "This account has no access to this instance. Ask your admin.",
+  signed_out: "You're signed out.",
+};
+
+export function signOutMessage(reason: SignOutReason): string {
+  return SIGN_OUT_MESSAGE[reason];
+}
+
+// ---- notices -------------------------------------------------------------------------------
+
+/** The navigation label for notices: with the unread count when there are any. */
+export function noticesLabel(unread: number): string {
+  return unread > 0 ? `Notices (${unread > 99 ? "99+" : unread})` : "Notices";
 }

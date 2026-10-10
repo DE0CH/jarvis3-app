@@ -1,12 +1,13 @@
 // The jarvis3 variant in a browser against a mock Jarvis 3 instance (mock-instance.ts) whose
-// daemon proxy reaches a real Paseo daemon (daemon.ts). Screens: task list, New task, chat,
-// Start for a paused task, My instructions & skills with Reset + Undo, admin users, and another
-// user's task (not found, and its daemon socket refused). Saves phone (390) and desktop (1440)
+// daemon proxy reaches a real Paseo daemon (daemon.ts). Screens: task list, New task, chat (the
+// task's reported agent), Start for a paused task, My instructions & skills with Reset + Undo,
+// notices with the unread count, admin users, and another user's task (not found, and its
+// daemon socket and HTTP relay refused). The HTTP relay reaches the daemon. Saves phone (390) and desktop (1440)
 // screenshots in light and dark to JARVIS3_SCREENSHOT_DIR (default e2e-artifacts/jarvis3).
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import type { TaskView } from "../src/jarvis3/api-types";
+import type { NoticeView, TaskView } from "../src/jarvis3/api-types";
 import { startTaskDaemon, type TaskDaemon } from "./daemon";
 import { startMockInstance, type MockInstance } from "./mock-instance";
 
@@ -31,7 +32,19 @@ function task(patch: Partial<TaskView> & Pick<TaskView, "id" | "userId" | "title
     createdAt: t,
     updatedAt: t,
     connected: true,
+    agentId: null,
     ...patch,
+  };
+}
+
+function notice(id: string, text: string, taskId: string | null): NoticeView {
+  return {
+    id,
+    kind: "task_failed",
+    text,
+    taskId,
+    createdAt: "2026-10-08T12:00:00.000Z",
+    read: false,
   };
 }
 
@@ -48,7 +61,7 @@ test.beforeAll(async () => {
     distDir: DIST,
     startDelayMs: 1_000,
     tasks: [
-      task({ id: RUNNING, userId: "u-alice", title: FIRST_PROMPT }),
+      task({ id: RUNNING, userId: "u-alice", title: FIRST_PROMPT, agentId: daemon.agentId }),
       task({
         id: PAUSED,
         userId: "u-alice",
@@ -57,9 +70,15 @@ test.beforeAll(async () => {
         pausedReason: "idle",
         connected: false,
       }),
-      task({ id: BOBS, userId: "u-bob", title: "Bob's private task" }),
+      task({ id: BOBS, userId: "u-bob", title: "Bob's private task", agentId: daemon.agentId }),
     ],
     daemons: { [RUNNING]: daemon, [BOBS]: daemon },
+    notices: {
+      "u-alice": [
+        notice("n2", "Your monthly machine hours are used up; 1 task was paused.", PAUSED),
+        notice("n1", "A task couldn't start.", null),
+      ],
+    },
   });
 });
 
@@ -239,4 +258,30 @@ test("staff don't see the admin section", async ({ page }) => {
   await page.goto(`${instance.url}/tasks`);
   await expect(page.getByTestId("jarvis3-nav-layer")).toBeVisible();
   await expect(page.getByTestId("jarvis3-nav-admin")).toHaveCount(0);
+});
+
+test("notices: the unread count is in the navigation and clears once they're seen", async ({
+  page,
+}) => {
+  await page.goto(`${instance.url}/tasks`);
+  const nav = page.getByTestId("jarvis3-nav-notices").filter({ visible: true });
+  await expect(nav).toHaveText("Notices (2)");
+  await nav.click();
+  await expect(page.getByTestId("jarvis3-notice-list")).toContainText("machine hours are used up");
+  await expect(page.getByTestId("jarvis3-notice-n2")).toContainText("New");
+  await expect(nav).toHaveText("Notices");
+  expect(instance.state.notices.get("u-alice")?.every((n) => n.read)).toBe(true);
+  await shoot(page, "notices");
+});
+
+test("the HTTP relay reaches the task's daemon (downloads); another user's is refused", async ({
+  page,
+}) => {
+  await page.goto(`${instance.url}/tasks`);
+  const own = await page.request.get(`${instance.url}/api/tasks/${RUNNING}/daemon/http/api/status`);
+  expect(own.status()).toBe(200);
+  expect(own.headers()["content-disposition"]).toBe("attachment");
+  expect(((await own.json()) as { status: string }).status).toBe("server_info");
+  const theirs = await page.request.get(`${instance.url}/api/tasks/${BOBS}/daemon/http/api/status`);
+  expect(theirs.status()).toBe(404);
 });

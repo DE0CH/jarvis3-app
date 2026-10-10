@@ -8,7 +8,7 @@ import { StyleSheet } from "react-native-unistyles";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ScrollView } from "@/components/ui/scroll-view";
 import { Button } from "@/components/ui/button";
-import type { Tone } from "./plan";
+import { noticesLabel, type Tone } from "./plan";
 import { useAccount } from "./hooks";
 
 interface NavItem {
@@ -22,6 +22,7 @@ const NAV: NavItem[] = [
   { href: "/me/layer", label: "My instructions & skills", testID: "jarvis3-nav-layer" },
 ];
 const ADMIN_NAV: NavItem = { href: "/admin/users", label: "Users", testID: "jarvis3-nav-admin" };
+const NOTICES_HREF = "/notices";
 
 export function Jarvis3Frame({
   title,
@@ -39,7 +40,12 @@ export function Jarvis3Frame({
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
   const account = useAccount();
-  const nav = account.me?.user.isAdmin ? [...NAV, ADMIN_NAV] : NAV;
+  const notices: NavItem = {
+    href: NOTICES_HREF,
+    label: noticesLabel(account.me?.unreadNotices ?? 0),
+    testID: "jarvis3-nav-notices",
+  };
+  const nav = account.me?.user.isAdmin ? [...NAV, notices, ADMIN_NAV] : [...NAV, notices];
   const body = <View style={styles.column}>{children}</View>;
   return (
     <View style={[styles.page, { paddingTop: insets.top }]} testID={testID}>

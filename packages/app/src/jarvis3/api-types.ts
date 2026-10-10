@@ -1,4 +1,4 @@
-// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit 293fa9a); refresh with
+// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit 2e2a433); refresh with
 // scripts/jarvis3-sync-api-types.sh. Type-only: never add runtime code here.
 // The Jarvis 3 instance API contract: request and response shapes of every route.
 // docs/API.md describes the routes and who may call them; this module is the machine-checked
@@ -14,7 +14,8 @@ export interface ApiError {
 
 export type ErrorCode =
   | "unauthenticated" // 401: no valid Cloudflare Access JWT (or, on /api/session/*, no valid session token)
-  | "forbidden" // 403: identity is valid but not an active member, a revoked device, or the wrong kind of caller
+  | "forbidden" // 403: identity is valid but not an active member, an unknown device, or the wrong kind of caller
+  | "device_revoked" // 403: this device's token was revoked (DELETE /api/devices/:id); pair the device again
   | "not_found" // 404: no such resource, OR it exists but belongs to someone else (uniform on purpose)
   | "bad_request" // 400: malformed body or parameters
   | "conflict" // 409: the resource is in a state that does not allow this (see message)
@@ -65,6 +66,12 @@ export interface UserDetail {
   user: UserView;
   limits: LimitsView;
   usage: UsageView;
+}
+
+/** GET /api/me: the caller's own detail, plus what only the caller sees. */
+export interface MeView extends UserDetail {
+  /** Notices the caller has not marked read yet (POST /api/notices/read). */
+  unreadNotices: number;
 }
 
 /** GET /api/users (admin) */
@@ -154,6 +161,11 @@ export interface TaskView {
   updatedAt: IsoTime;
   /** True while the session's reverse channel is connected (chat is possible). */
   connected: boolean;
+  /**
+   * The Paseo agent on the task's daemon that is the task itself (the one the first prompt went to),
+   * as reported by the session. null until the session has created it. Kept across pause/resume.
+   */
+  agentId: string | null;
 }
 
 /** POST /api/tasks */
@@ -270,6 +282,8 @@ export interface SessionStatusRequest {
   activity: "busy" | "idle";
   /** Optional new title (≤ 120 characters). */
   title?: string;
+  /** The task's main agent id on the daemon ([A-Za-z0-9._:-]{1,128}); sent once it exists. */
+  agentId?: string;
 }
 
 // ---- notices / admin --------------------------------------------------------------------------
@@ -280,11 +294,23 @@ export interface NoticeView {
   text: string;
   taskId: string | null;
   createdAt: IsoTime;
+  /** Whether the caller has marked it read (POST /api/notices/read). */
+  read: boolean;
 }
 
 /** GET /api/notices */
 export interface NoticeList {
   notices: NoticeView[];
+}
+
+/** POST /api/notices/read: mark notices read, all of them or those created up to `upTo` (a notice id). */
+export interface MarkNoticesReadRequest {
+  upTo?: string;
+}
+
+/** POST /api/notices/read */
+export interface MarkNoticesReadResult {
+  unreadNotices: number;
 }
 
 /** GET /api/admin/budget (admin) */
@@ -327,6 +353,17 @@ export type ServerToSessionFrame =
     }
   | { type: "ws-msg"; id: string; text?: string; data_b64?: string }
   | { type: "ws-close"; id: string; code?: number; reason?: string }
+  /** An HTTP request to the local daemon (the HTTP relay). Body ≤ 1 MiB, base64. */
+  | {
+      type: "http-req";
+      id: string;
+      method: string;
+      path: string;
+      headers: Record<string, string>;
+      body_b64?: string;
+    }
+  /** The app went away: stop sending the response of request `id`. */
+  | { type: "http-cancel"; id: string }
   | { type: "pong" };
 
 /** Frames the session's channel agent sends to the server. */
@@ -334,4 +371,8 @@ export type SessionToServerFrame =
   | { type: "hello"; agent: string }
   | { type: "ws-msg"; id: string; text?: string; data_b64?: string }
   | { type: "ws-close"; id: string; code?: number; reason?: string }
+  /** The daemon's answer to http-req `id`: status and headers first, then body chunks, then the end. */
+  | { type: "http-res"; id: string; status: number; headers: Record<string, string> }
+  | { type: "http-data"; id: string; data_b64: string }
+  | { type: "http-end"; id: string; error?: string }
   | { type: "ping" };

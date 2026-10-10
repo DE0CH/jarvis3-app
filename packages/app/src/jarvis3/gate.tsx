@@ -9,6 +9,7 @@ import { accountStore } from "./client";
 import { isJarvis3 } from "./config";
 import { forgetDevice, isFreshlyPaired, loadDevice, pairDevice } from "./device";
 import { useAccount, useDevice } from "./hooks";
+import { signOutMessage } from "./plan";
 import { Banner } from "./ui";
 
 export function Jarvis3Gate({ children }: { children: ReactNode }): ReactNode {
@@ -28,23 +29,31 @@ function Jarvis3GateContent({ children }: { children: ReactNode }): ReactNode {
     if (device.paired) void accountStore.load();
   }, [device.paired]);
 
-  // A freshly minted token is refused for a few seconds (Cloudflare propagation): retry.
+  // A freshly minted token is refused for a few seconds (Cloudflare propagation): retry. A token
+  // the instance says was revoked is forgotten at once.
   useEffect(() => {
     if (!account.signedOut || Platform.OS === "web") return;
-    if (isFreshlyPaired()) {
+    if (isFreshlyPaired() && account.signOutReason !== "revoked") {
       const timer = setTimeout(() => void accountStore.load(true), 5_000);
       return () => clearTimeout(timer);
     }
     void forgetDevice();
     return undefined;
-  }, [account.signedOut]);
+  }, [account.signedOut, account.signOutReason]);
+
+  // Keep the unread notice count fresh while a Jarvis screen is open.
+  const hasMe = account.me !== null;
+  useEffect(() => {
+    if (!hasMe) return;
+    return accountStore.watch();
+  }, [hasMe]);
 
   if (!device.loaded) return <Centered text="Loading…" />;
   if (!device.paired) return <SignIn />;
   if (!account.loaded) return <Centered text="Loading…" />;
   if (account.signedOut && Platform.OS === "web") {
     return (
-      <Centered text={account.error ?? "You're signed out."}>
+      <Centered text={signOutMessage(account.signOutReason ?? "signed_out")}>
         <Button variant="default" onPress={reloadPage} testID="jarvis3-reload">
           Sign in again
         </Button>
@@ -72,6 +81,7 @@ function reloadPage(): void {
 }
 
 function SignIn() {
+  const account = useAccount();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const signIn = useCallback(() => {
@@ -91,6 +101,11 @@ function SignIn() {
       <Button variant="default" onPress={signIn} loading={busy} testID="jarvis3-sign-in">
         Sign in
       </Button>
+      {!error && account.signOutReason && account.signOutReason !== "signed_out" ? (
+        <Banner tone="info" testID="jarvis3-signed-out-reason">
+          {signOutMessage(account.signOutReason)}
+        </Banner>
+      ) : null}
       {error ? <Banner tone="error">{error}</Banner> : null}
     </Centered>
   );

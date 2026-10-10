@@ -21,7 +21,7 @@ import {
 import { useSessionStore } from "@/stores/session-store";
 import type { TaskView } from "../api-types";
 import { jarvis3Api, tasksStore } from "../client";
-import { type ChatPhase, Jarvis3Error, pickTaskAgent, planTaskChat, presentTask } from "../plan";
+import { type ChatPhase, Jarvis3Error, planTaskChat, presentTask, taskAgentOnHost } from "../plan";
 import { messageOf, REFRESH_WHILE_CHANGING_MS } from "../stores";
 import { ensureTaskHost, findTaskHost } from "../task-host";
 import { Banner, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
@@ -92,7 +92,15 @@ export function TaskChatScreen({ taskId }: { taskId: string }) {
       serverId ? Array.from(state.sessions[serverId]?.agents?.values() ?? []) : [],
     ),
   );
-  const agentId = useMemo(() => pickTaskAgent(agents), [agents]);
+  // the agent the session reported as the task's own, once the host has it
+  const agentId = useMemo(
+    () =>
+      taskAgentOnHost(
+        task,
+        agents.map((agent) => agent.id),
+      ),
+    [task, agents],
+  );
   const agentWorkspaceId = agents.find((agent) => agent.id === agentId)?.workspaceId ?? "";
 
   const phase = planTaskChat({

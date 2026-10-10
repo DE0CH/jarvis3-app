@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { accountStore, layerStore, tasksStore } from "./client";
+import { accountStore, layerStore, noticesStore, tasksStore } from "./client";
 import { getDeviceSnapshot, subscribeDevice } from "./device";
 import type { Store } from "./stores";
 
@@ -10,5 +10,6 @@ function useStore<T>(store: Store<T>): T {
 export const useTasks = () => useStore(tasksStore);
 export const useAccount = () => useStore(accountStore);
 export const useLayer = () => useStore(layerStore);
+export const useNotices = () => useStore(noticesStore);
 export const useDevice = () =>
   useSyncExternalStore(subscribeDevice, getDeviceSnapshot, getDeviceSnapshot);

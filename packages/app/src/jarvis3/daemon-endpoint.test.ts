@@ -2,12 +2,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildTaskDaemonUrl,
   isTaskDaemonUrl,
+  jarvis3DaemonHttpUrl,
   jarvis3DaemonUrl,
   setJarvis3InstanceUrlResolver,
   taskEndpoint,
   taskIdFromEndpoint,
 } from "./daemon-endpoint";
 import { normalizeHostPort } from "@getpaseo/protocol/daemon-endpoints";
+import { jarvis3DownloadRequest } from "./download-hook";
+import { setDeviceToken } from "./device-token";
 
 afterEach(() => setJarvis3InstanceUrlResolver(() => null));
 
@@ -63,5 +66,41 @@ describe("daemon URL hook", () => {
     expect(isTaskDaemonUrl("https://jarvis.example.org", "wss://jarvis.example.org/ws")).toBe(
       false,
     );
+  });
+});
+
+describe("the HTTP relay (file downloads)", () => {
+  afterEach(() => setDeviceToken(null));
+  it("turns a daemon path on a task host into the instance's relay URL", () => {
+    setJarvis3InstanceUrlResolver(() => "https://jarvis.example.org");
+    expect(
+      jarvis3DaemonHttpUrl(taskEndpoint("7ce0326a5435ab61"), "/api/files/download?token=a%2Bb"),
+    ).toBe(
+      "https://jarvis.example.org/api/tasks/7ce0326a5435ab61/daemon/http/api/files/download?token=a%2Bb",
+    );
+    expect(jarvis3DaemonHttpUrl("localhost:6767", "/api/files/download")).toBeNull();
+    expect(() => jarvis3DaemonHttpUrl(taskEndpoint("a1"), "api/x")).toThrow();
+  });
+  it("builds the download request, with the device headers on iOS and none on the web", () => {
+    setJarvis3InstanceUrlResolver(() => "http://127.0.0.1:8090");
+    const daemon = { connections: [{ type: "directTcp", endpoint: taskEndpoint("a1") }] };
+    expect(jarvis3DownloadRequest(daemon, "tok/+=")).toEqual({
+      url: "http://127.0.0.1:8090/api/tasks/a1/daemon/http/api/files/download?token=tok%2F%2B%3D",
+      headers: null,
+    });
+    setDeviceToken({ id: "d", clientId: "cid", clientSecret: "sec", pairedAt: 0 });
+    expect(jarvis3DownloadRequest(daemon, "t")?.headers).toEqual({
+      "CF-Access-Client-Id": "cid",
+      "CF-Access-Client-Secret": "sec",
+    });
+  });
+  it("leaves ordinary hosts to upstream", () => {
+    expect(
+      jarvis3DownloadRequest(
+        { connections: [{ type: "directTcp", endpoint: "localhost:6767" }] },
+        "t",
+      ),
+    ).toBeNull();
+    expect(jarvis3DownloadRequest(undefined, "t")).toBeNull();
   });
 });
