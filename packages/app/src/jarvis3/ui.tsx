@@ -10,6 +10,7 @@ import { ScrollView } from "@/components/ui/scroll-view";
 import { Button } from "@/components/ui/button";
 import { approvalsLabel } from "./approvals";
 import { noticesLabel, type Tone } from "./plan";
+import { SCHEDULES_LABEL } from "./schedules";
 import { useAccount } from "./hooks";
 
 interface NavItem {
@@ -18,11 +19,17 @@ interface NavItem {
   testID: string;
 }
 
+const SCHEDULES_HREF = "/scheduled";
 const TASKS_NAV: NavItem = { href: "/tasks", label: "Tasks", testID: "jarvis3-nav-tasks" };
 const LAYER_NAV: NavItem = {
   href: "/me/layer",
   label: "My instructions & skills",
   testID: "jarvis3-nav-layer",
+};
+const SCHEDULES_NAV: NavItem = {
+  href: SCHEDULES_HREF,
+  label: SCHEDULES_LABEL,
+  testID: "jarvis3-nav-schedules",
 };
 const ADMIN_NAV: NavItem = { href: "/admin/users", label: "Users", testID: "jarvis3-nav-admin" };
 const NOTICES_HREF = "/notices";
@@ -30,7 +37,11 @@ const APPROVALS_HREF = "/approvals";
 
 function isCurrent(pathname: string, href: string): boolean {
   if (pathname === href) return true;
-  return (href === "/tasks" || href === APPROVALS_HREF) && pathname.startsWith(`${href}/`);
+  if (href === "/tasks" && pathname.startsWith("/channels/")) return true;
+  return (
+    (href === "/tasks" || href === APPROVALS_HREF || href === SCHEDULES_HREF) &&
+    pathname.startsWith(`${href}/`)
+  );
 }
 
 export function Jarvis3Frame({
@@ -59,7 +70,9 @@ export function Jarvis3Frame({
     label: approvalsLabel(account.me?.pendingApprovals ?? 0),
     testID: "jarvis3-nav-approvals",
   };
-  const base = [TASKS_NAV, approvals, LAYER_NAV, notices];
+  // Scheduled tasks only on a server that has them (features.schedules).
+  const scheduled = account.me?.features?.schedules ? [SCHEDULES_NAV] : [];
+  const base = [TASKS_NAV, ...scheduled, approvals, LAYER_NAV, notices];
   const nav = account.me?.user.isAdmin ? [...base, ADMIN_NAV] : base;
   const body = <View style={styles.column}>{children}</View>;
   return (

@@ -5,6 +5,7 @@ import { createApprovalsStore } from "./approvals";
 import { getInstanceUrl } from "./config";
 import { deviceHeaders } from "./device-token";
 import { registerJarvis3InstanceUrl } from "./ws-hook";
+import { createSchedulesStore, createTaskExtrasStore, deviceTimeZone } from "./schedules";
 import {
   createAccountStore,
   createLayerStore,
@@ -17,6 +18,7 @@ export const jarvis3Api = createJarvis3Api({
   authHeaders: deviceHeaders,
   credentials: Platform.OS === "web" ? "include" : "omit",
   fetch: (input, init) => fetch(input, init),
+  timeZone: deviceTimeZone,
 });
 
 const timers = {
@@ -29,5 +31,7 @@ export const accountStore = createAccountStore(jarvis3Api, timers);
 export const noticesStore = createNoticesStore(jarvis3Api, accountStore);
 export const layerStore = createLayerStore(jarvis3Api);
 export const approvalsStore = createApprovalsStore(jarvis3Api, accountStore);
+export const schedulesStore = createSchedulesStore(jarvis3Api);
+export const taskExtrasStore = createTaskExtrasStore(jarvis3Api, accountStore);
 
 registerJarvis3InstanceUrl();

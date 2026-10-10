@@ -251,6 +251,10 @@ export function createAccountStore(api: Jarvis3Api, timers?: Timers) {
       const me = state.get().me;
       if (me && me.unreadNotices !== unreadNotices) state.set({ me: { ...me, unreadNotices } });
     },
+    setUnreadPosts(unreadPosts: number) {
+      const me = state.get().me;
+      if (me && me.unreadPosts !== unreadPosts) state.set({ me: { ...me, unreadPosts } });
+    },
   };
 }
 

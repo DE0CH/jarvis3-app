@@ -9,6 +9,7 @@ import type { NoticeView } from "../api-types";
 import { noticesStore } from "../client";
 import { useNotices } from "../hooks";
 import { Banner, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
+import { noticeTarget } from "../schedules";
 import { formatWhen } from "./format";
 
 export function NoticesScreen() {
@@ -47,12 +48,11 @@ function NoticesBody({ loaded, notices }: { loaded: boolean; notices: NoticeView
 
 function NoticeRow({ notice }: { notice: NoticeView }) {
   const router = useRouter();
-  const taskId = notice.taskId;
-  const approvalNeeded = notice.kind === "approval_needed";
+  const target = noticeTarget(notice);
+  const href = target?.href ?? null;
   const open = useCallback(() => {
-    if (approvalNeeded) router.push("/approvals" as Href);
-    else if (taskId) router.push(`/tasks/${encodeURIComponent(taskId)}` as Href);
-  }, [router, taskId, approvalNeeded]);
+    if (href) router.push(href as Href);
+  }, [router, href]);
   const newPill = useMemo(
     () => (notice.read ? undefined : <StatusPill tone="busy" label="New" />),
     [notice.read],
@@ -64,9 +64,9 @@ function NoticeRow({ notice }: { notice: NoticeView }) {
       labelAccessory={newPill}
       testID={`jarvis3-notice-${notice.id}`}
     >
-      {approvalNeeded || taskId ? (
+      {target ? (
         <Button variant="ghost" size="sm" onPress={open}>
-          {approvalNeeded ? "Review" : "Open task"}
+          {target.label}
         </Button>
       ) : null}
     </SettingsRow>

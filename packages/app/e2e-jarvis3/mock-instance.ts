@@ -19,9 +19,11 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import { exampleApprovals } from "./approval-fixtures";
+import { createMockSchedules } from "./mock-schedules";
 import type {
   ApiError,
   ApprovalView,
+  ChannelPostView,
   CreateTaskRequest,
   DecideRequest,
   ErrorCode,
@@ -33,6 +35,7 @@ import type {
   PersonalLayerView,
   PersonalNote,
   ResetResult,
+  ScheduleDetail,
   SetLimitsRequest,
   SuggestionView,
   SuggestRequest,
@@ -40,6 +43,7 @@ import type {
   ToolsAdminView,
   UserDetail,
   UserStatus,
+  WakeupView,
 } from "../src/jarvis3/api-types";
 
 export interface MockUser {
@@ -93,6 +97,10 @@ export interface MockInstanceOptions {
   approvals?: ApprovalView[];
   /** The instance's owner (Tier 3 approvals with a passkey). */
   ownerId?: string;
+  /** Scheduled tasks (with their runs), wakeups and channel posts to start with. */
+  schedules?: ScheduleDetail[];
+  wakeups?: WakeupView[];
+  posts?: ChannelPostView[];
 }
 
 export interface MockInstance {
@@ -105,7 +113,12 @@ export interface MockInstance {
     notices: Map<string, NoticeView[]>;
     suggestions: SuggestionView[];
     approvals: ApprovalView[];
+    schedules: ScheduleDetail[];
+    wakeups: WakeupView[];
+    posts: ChannelPostView[];
   };
+  /** A post from a task's agent to its channel (what jarvis_post does), with its notice. */
+  addPost(taskId: string, title: string, text: string): ChannelPostView;
   close(): Promise<void>;
 }
 
@@ -196,8 +209,10 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     unreadNotices: noticesOf(user.id).filter((notice) => !notice.read).length,
     features: {
       suggestions: true,
+      schedules: true,
       ...(options.tools ? { tools: { search: true, fetch: true, proxy: true } } : {}),
     },
+    unreadPosts: scheduled.unreadPosts(user.id),
     pendingApprovals: approvals.filter((a) => canDecide(user, a)).length,
     isOwner: user.id === ownerId,
   });
@@ -414,14 +429,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
 
   // ---- task handlers ----
 
-  const createTask: Handler = async ({ user, body }) => {
-    const request = (await body()) as CreateTaskRequest;
-    if (!request.prompt || request.prompt.length > 16000) {
-      throw new HttpError(400, "bad_request", "prompt is required");
-    }
-    const key = `${user.id}:${request.requestId ?? ""}`;
-    const repeat = request.requestId ? tasks.find((t) => t.id === created.get(key)) : null;
-    if (repeat) return [201, repeat];
+  const startTask = (user: MockUser, request: CreateTaskRequest): TaskView => {
     counter += 1;
     const task: TaskView = {
       id: `new${counter.toString(16).padStart(13, "0")}`,
@@ -438,9 +446,20 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       agentId: null,
     };
     tasks.unshift(task);
-    if (request.requestId) created.set(key, task.id);
     if (options.newTaskDaemon) daemons[task.id] = options.newTaskDaemon;
     startLater(task);
+    return task;
+  };
+  const createTask: Handler = async ({ user, body }) => {
+    const request = (await body()) as CreateTaskRequest;
+    if (!request.prompt || request.prompt.length > 16000) {
+      throw new HttpError(400, "bad_request", "prompt is required");
+    }
+    const key = `${user.id}:${request.requestId ?? ""}`;
+    const repeat = request.requestId ? tasks.find((t) => t.id === created.get(key)) : null;
+    if (repeat) return [201, repeat];
+    const task = startTask(user, request);
+    if (request.requestId) created.set(key, task.id);
     return [201, task];
   };
   const pauseTask: Handler = ({ user, params }) => {
@@ -593,8 +612,23 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     return [200, detailOf(target)];
   };
 
+  // ---- scheduled tasks, wakeups, channels (mock-schedules.ts) ----
+
+  const scheduled = createMockSchedules({
+    fail: (status, code, message) => new HttpError(status, code, message),
+    tasks,
+    startTask: (user, request) => startTask(user as MockUser, request),
+    ownTask: (user, id) => ownTask(user as MockUser, id),
+    addNotice: (userId, kind, text, taskId) => addNotice(userId, { kind, text, taskId }),
+    defaultModel: MODELS.default,
+    schedules: options.schedules,
+    wakeups: options.wakeups,
+    posts: options.posts,
+  });
+
   const ID = "([^/]+)";
   const routes: Route[] = [
+    ...scheduled.routes,
     ["GET", /^\/api\/me$/, ({ user }) => [200, meOf(user)]],
     ["GET", /^\/api\/models$/, () => [200, MODELS]],
     ["GET", /^\/api\/notices$/, ({ user }) => [200, { notices: noticesOf(user.id) }]],
@@ -980,7 +1014,16 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
   return {
     url: `http://127.0.0.1:${port}`,
     port,
-    state: { tasks, layers, requests, notices, suggestions, approvals },
+    state: {
+      tasks,
+      layers,
+      requests,
+      notices,
+      suggestions,
+      approvals,
+      ...scheduled.state,
+    },
+    addPost: scheduled.addPost,
     close: () =>
       new Promise<void>((resolve) => {
         for (const client of wss.clients) client.terminate();

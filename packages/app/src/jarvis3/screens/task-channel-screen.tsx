@@ -1,0 +1,292 @@
+// A task's channel and wakeups: what the task's agent posted for its owner (reports, the result of
+// a scheduled run), newest first, and the wakeups it armed, with Cancel. Opening it marks the posts
+// read (only for the task's owner; the server ignores an admin's read).
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Text, View } from "react-native";
+import { useRouter, type Href } from "expo-router";
+import { StyleSheet } from "react-native-unistyles";
+import { MarkdownRenderer } from "@/components/markdown/renderer";
+import { SettingsCard, SettingsRow, SettingsSection } from "@/components/settings";
+import { Button } from "@/components/ui/button";
+import type { ChannelPostView, TaskView, WakeupView } from "../api-types";
+import { jarvis3Api, taskExtrasStore } from "../client";
+import { useTaskExtras } from "../hooks";
+import { describeWakeupWhen, wakeupStateLabel, wakeupsOrdered } from "../schedules";
+import { messageOf } from "../stores";
+import { Banner, CenteredDialog, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
+import { formatWhen } from "./format";
+
+export function TaskChannelScreen({ taskId }: { taskId: string }) {
+  const router = useRouter();
+  const extras = useTaskExtras();
+  const posts = extras.posts[taskId];
+  const wakeups = extras.wakeups[taskId];
+  const [task, setTask] = useState<TaskView | null>(null);
+  const [taskError, setTaskError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<WakeupView | null>(null);
+
+  useEffect(() => {
+    jarvis3Api
+      .getTask(taskId)
+      .then(setTask)
+      .catch((error: unknown) => setTaskError(messageOf(error)));
+    void taskExtrasStore.loadPosts(taskId, { markRead: true });
+    void taskExtrasStore.loadWakeups(taskId);
+  }, [taskId]);
+
+  const openChat = useCallback(
+    () => router.push(`/tasks/${encodeURIComponent(taskId)}` as Href),
+    [router, taskId],
+  );
+  const canOpenChat = task !== null && task.state !== "archived" && task.state !== "destroying";
+  const actions = useMemo(
+    () =>
+      canOpenChat ? (
+        <Button variant="outline" size="sm" onPress={openChat} testID="jarvis3-channel-open-chat">
+          Open chat
+        </Button>
+      ) : null,
+    [canOpenChat, openChat],
+  );
+  const closeDialog = useCallback(() => setCancelling(null), []);
+
+  if (taskError && !posts?.posts.length) {
+    return (
+      <Jarvis3Frame title="Channel" testID="jarvis3-channel">
+        <EmptyState title="This task doesn't exist, or isn't yours." hint={taskError} />
+      </Jarvis3Frame>
+    );
+  }
+
+  return (
+    <Jarvis3Frame
+      title={task ? `Channel: ${task.title}` : "Channel"}
+      testID="jarvis3-channel"
+      actions={actions}
+    >
+      <WakeupsSection
+        entry={wakeups}
+        cancelling={extras.cancelling}
+        cancelErrors={extras.cancelErrors}
+        onCancel={setCancelling}
+      />
+      <SettingsSection title="Posts">
+        {posts?.error ? <Banner tone="error">{posts.error}</Banner> : null}
+        <PostsBody loaded={posts?.loaded ?? false} posts={posts?.posts ?? []} />
+      </SettingsSection>
+      <CancelWakeupDialog
+        wakeup={cancelling}
+        busy={cancelling ? extras.cancelling[cancelling.id] === true : false}
+        onClose={closeDialog}
+      />
+    </Jarvis3Frame>
+  );
+}
+
+function CancelWakeupDialog({
+  wakeup,
+  busy,
+  onClose,
+}: {
+  wakeup: WakeupView | null;
+  busy: boolean;
+  onClose: () => void;
+}) {
+  const confirm = useCallback(() => {
+    if (!wakeup) return;
+    const run = async () => {
+      await taskExtrasStore.cancelWakeup(wakeup);
+      onClose();
+    };
+    void run();
+  }, [wakeup, onClose]);
+  return (
+    <CenteredDialog
+      visible={wakeup !== null}
+      title="Cancel this wakeup?"
+      message={`The task won't be woken for "${wakeup?.name ?? ""}". The agent can arm it again.`}
+      confirmLabel="Cancel wakeup"
+      cancelLabel="Keep"
+      destructive
+      busy={busy}
+      onCancel={onClose}
+      onConfirm={confirm}
+      testID="jarvis3-wakeup-cancel-dialog"
+    />
+  );
+}
+
+function PostsBody({ loaded, posts }: { loaded: boolean; posts: ChannelPostView[] }) {
+  if (!loaded) return <EmptyState title="Loading…" />;
+  if (posts.length === 0) {
+    return (
+      <EmptyState
+        title="No posts yet"
+        hint="The agent posts results here (a report, the outcome of a scheduled run), and you get a notice."
+      />
+    );
+  }
+  return (
+    <View style={styles.posts} testID="jarvis3-channel-posts">
+      {posts.map((post) => (
+        <PostCard key={post.id} post={post} />
+      ))}
+    </View>
+  );
+}
+
+function PostCard({ post }: { post: ChannelPostView }) {
+  return (
+    <View style={styles.post} testID={`jarvis3-post-${post.id}`}>
+      <View style={styles.postHeader}>
+        <Text style={styles.postTitle} numberOfLines={2}>
+          {post.title}
+        </Text>
+        {post.read ? null : <StatusPill tone="busy" label="New" />}
+      </View>
+      <Text style={styles.postWhen}>{formatWhen(post.createdAt)}</Text>
+      <View style={styles.postBody}>
+        <MarkdownRenderer text={post.text} enableHtmlish={false} />
+      </View>
+    </View>
+  );
+}
+
+function WakeupsSection({
+  entry,
+  cancelling,
+  cancelErrors,
+  onCancel,
+}: {
+  entry: { loaded: boolean; wakeups: WakeupView[]; error: string | null } | undefined;
+  cancelling: Record<string, true>;
+  cancelErrors: Record<string, string>;
+  onCancel: (wakeup: WakeupView) => void;
+}) {
+  const wakeups = entry?.wakeups;
+  const ordered = useMemo(() => wakeupsOrdered(wakeups ?? []), [wakeups]);
+  if (!entry?.loaded) return null;
+  const error = entry.error;
+  return (
+    <SettingsSection title="Wakeups">
+      {error ? <Banner tone="error">{error}</Banner> : null}
+      {ordered.length === 0 ? (
+        <SettingsCard>
+          <SettingsRow
+            label="No wakeups"
+            hint="The agent can ask to be woken later (at a time, on a repeat, or when a page changes). The task starts again by itself if it was paused."
+          />
+        </SettingsCard>
+      ) : (
+        <SettingsCard testID="jarvis3-wakeups">
+          {ordered.map((wakeup) => (
+            <WakeupRow
+              key={wakeup.id}
+              wakeup={wakeup}
+              busy={cancelling[wakeup.id] === true}
+              error={cancelErrors[wakeup.id] ?? null}
+              onCancel={onCancel}
+            />
+          ))}
+        </SettingsCard>
+      )}
+    </SettingsSection>
+  );
+}
+
+function WakeupRow({
+  wakeup,
+  busy,
+  error,
+  onCancel,
+}: {
+  wakeup: WakeupView;
+  busy: boolean;
+  error: string | null;
+  onCancel: (wakeup: WakeupView) => void;
+}) {
+  const state = wakeupStateLabel(wakeup);
+  const pill = useMemo(() => <StatusPill tone={state.tone} label={state.label} />, [state]);
+  const cancel = useCallback(() => onCancel(wakeup), [onCancel, wakeup]);
+  const hint = useMemo(
+    () => (
+      <View style={styles.wakeupHint}>
+        <Text style={styles.wakeupWhen}>{describeWakeupWhen(wakeup, formatWhen)}</Text>
+        <Text style={styles.wakeupPrompt} numberOfLines={3}>
+          {wakeup.prompt}
+        </Text>
+        {wakeup.lastError ? <Text style={styles.wakeupError}>{wakeup.lastError}</Text> : null}
+      </View>
+    ),
+    [wakeup],
+  );
+  return (
+    <SettingsRow
+      label={wakeup.name}
+      labelAccessory={pill}
+      hint={hint}
+      error={error ?? undefined}
+      testID={`jarvis3-wakeup-${wakeup.id}`}
+    >
+      {wakeup.state === "armed" ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onPress={cancel}
+          loading={busy}
+          testID={`jarvis3-wakeup-cancel-${wakeup.id}`}
+        >
+          Cancel
+        </Button>
+      ) : null}
+    </SettingsRow>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  posts: {
+    gap: theme.spacing[3],
+  },
+  post: {
+    gap: theme.spacing[1],
+    padding: theme.spacing[4],
+    borderRadius: theme.borderRadius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
+  },
+  postHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[2],
+  },
+  postTitle: {
+    flexShrink: 1,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
+  },
+  postWhen: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  postBody: {
+    marginTop: theme.spacing[2],
+  },
+  wakeupHint: {
+    gap: theme.spacing[1],
+  },
+  wakeupWhen: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  wakeupPrompt: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
+  wakeupError: {
+    color: theme.colors.statusDanger,
+    fontSize: theme.fontSize.sm,
+  },
+}));

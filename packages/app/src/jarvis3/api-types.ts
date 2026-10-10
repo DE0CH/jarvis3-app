@@ -1,4 +1,4 @@
-// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit ce98d45); refresh with
+// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit 24f8b75); refresh with
 // scripts/jarvis3-sync-api-types.sh. Type-only: never add runtime code here.
 // The Jarvis 3 instance API contract: request and response shapes of every route.
 // docs/API.md describes the routes and who may call them; this module is the machine-checked
@@ -105,6 +105,8 @@ export interface MeView extends UserDetail {
   pendingApprovals: number;
   /** Whether the caller is the instance's owner: the one who approves Tier 3 changes with a passkey. */
   isOwner: boolean;
+  /** Channel posts of the caller's own tasks not yet marked read (section 15). */
+  unreadPosts?: number;
   /** What this instance has switched on. */
   features?: InstanceFeatures;
 }
@@ -118,6 +120,8 @@ export interface InstanceFeatures {
   files?: boolean;
   /** Transcript search (GET /api/search). Optional: absent on older servers. */
   search?: boolean;
+  /** Scheduled tasks, wakeups and channels (section 15). Optional: absent on older servers. */
+  schedules?: boolean;
 }
 
 /** GET /api/users (admin) */
@@ -221,6 +225,8 @@ export interface TaskView {
    * older servers.
    */
   attachments?: string[];
+  /** The schedule that started this task (section 15), or null. */
+  scheduleId?: string | null;
 }
 
 /** POST /api/tasks */
@@ -586,7 +592,13 @@ export interface NoticeView {
     | "suggestion"
     | "approval_needed"
     | "approval_decided"
-    | "passkey_added";
+    | "passkey_added"
+    /** A task posted to its channel (section 15). */
+    | "channel_post"
+    /** A scheduled run was skipped (cap, budget, the previous run still live) or could not start. */
+    | "schedule_skipped"
+    /** A wakeup could not resume its task (cap, budget), or a condition wakeup gave up. */
+    | "wakeup";
   text: string;
   taskId: string | null;
   createdAt: IsoTime;
@@ -823,3 +835,219 @@ export type SessionToServerFrame =
   | { type: "http-data"; id: string; data_b64: string }
   | { type: "http-end"; id: string; error?: string }
   | { type: "ping" };
+
+// ---- scheduled tasks, wakeups, channels (docs/API.md section 15) ---------------------------------
+
+/**
+ * A scheduled task: `prompt` runs as a NEW task of the owner on a cron schedule in `timeZone`.
+ * `cron` is five fields (minute hour day month weekday; names like MON or JAN allowed).
+ */
+export interface ScheduleView {
+  id: string;
+  userId: string;
+  title: string;
+  prompt: string;
+  model: string;
+  cron: string;
+  timeZone: string;
+  enabled: boolean;
+  /** The next firing (null when disabled, or when the expression never fires again). */
+  nextRunAt: IsoTime | null;
+  lastRun: ScheduleRunView | null;
+  createdAt: IsoTime;
+  updatedAt: IsoTime;
+}
+
+/**
+ * One firing. `started`: a task was made (`taskId`). `skipped_*`: no task — the owner's
+ * machine-hour cap, the instance budget, the previous run's task still live, or the server was
+ * down at the time (`missed`). `failed`: the task could not be made (`error`).
+ */
+export type ScheduleRunResult =
+  | "started"
+  | "skipped_cap"
+  | "skipped_budget"
+  | "skipped_overlap"
+  | "missed"
+  | "failed";
+
+export interface ScheduleRunView {
+  id: number;
+  scheduleId: string;
+  /** When it was due (the cron time), and when the server acted on it. */
+  dueAt: IsoTime;
+  ranAt: IsoTime;
+  /** true for "Run now". */
+  manual: boolean;
+  result: ScheduleRunResult;
+  taskId: string | null;
+  error: string | null;
+}
+
+/** GET /api/schedules */
+export interface ScheduleList {
+  schedules: ScheduleView[];
+}
+
+/** GET /api/schedules/:id */
+export interface ScheduleDetail extends ScheduleView {
+  /** The last 50 runs, newest first. */
+  runs: ScheduleRunView[];
+}
+
+/** POST /api/schedules */
+export interface CreateScheduleRequest {
+  title?: string;
+  prompt: string;
+  /** Default: the instance's default model. */
+  model?: string;
+  cron: string;
+  /** An IANA zone, e.g. "Europe/London" (the app sends the device's own). */
+  timeZone: string;
+  enabled?: boolean;
+}
+
+/** PATCH /api/schedules/:id: any subset. */
+export type UpdateScheduleRequest = Partial<CreateScheduleRequest>;
+
+/** POST /api/schedules/preview: check an expression and see its next firings. */
+export interface SchedulePreviewRequest {
+  cron: string;
+  timeZone: string;
+}
+export interface SchedulePreview {
+  ok: boolean;
+  /** Why the expression is refused (ok: false). */
+  error: string | null;
+  /** The next five firings, ISO, and as wall-clock text in the zone ("Mon 13 Oct 09:00"). */
+  next: { at: IsoTime; local: string }[];
+}
+
+/** POST /api/schedules/:id/run */
+export interface ScheduleRunNowResult {
+  run: ScheduleRunView;
+  task: TaskView | null;
+}
+
+/**
+ * A wakeup belongs to one task: at a time (`kind: "time"`, optionally recurring with `cron`), or when
+ * an HTTP check passes (`kind: "check"`), the server puts `prompt` in the task's inbox, resuming the
+ * task first if it is paused; the session hands it to the task's agent as a new message once the
+ * agent is not mid-turn.
+ */
+export interface WakeupView {
+  id: string;
+  taskId: string;
+  userId: string;
+  /** Unique per task among armed wakeups; arming the same name again replaces it. */
+  name: string;
+  kind: "time" | "check";
+  prompt: string;
+  /** check: delivered instead when the check gives up (expiry). */
+  failPrompt: string | null;
+  /** time: the next firing; check: the next check. */
+  at: IsoTime | null;
+  cron: string | null;
+  timeZone: string | null;
+  check: WakeupCheck | null;
+  intervalSeconds: number | null;
+  /** check: gives up at; recurring time: no firing after. */
+  expiresAt: IsoTime | null;
+  state: "armed" | "fired" | "expired" | "cancelled";
+  firedAt: IsoTime | null;
+  /** Last check outcome or delivery problem. */
+  lastError: string | null;
+  checks: number;
+  createdAt: IsoTime;
+}
+
+/**
+ * A condition the SERVER evaluates: one HTTPS GET to a public address (no credentials, no
+ * redirects followed, 10 s, first 256 KiB). Passes when every given condition holds:
+ * `status` equals, `contains` is in the body, `absent` is not in the body, `changed` (the body
+ * differs from the first check's). Plain text matching only (no regular expressions on the server).
+ */
+export interface WakeupCheck {
+  url: string;
+  status?: number;
+  contains?: string;
+  absent?: string;
+  changed?: boolean;
+}
+
+/** GET /api/wakeups */
+export interface WakeupList {
+  wakeups: WakeupView[];
+}
+
+/** POST /api/session/wakeups (the session, for its own task). Give `at`, `inSeconds`, `cron` or `check`. */
+export interface SessionWakeupRequest {
+  name?: string;
+  prompt: string;
+  at?: IsoTime;
+  inSeconds?: number;
+  cron?: string;
+  /** With `cron`; default the owner's last-used zone, else UTC. */
+  timeZone?: string;
+  check?: WakeupCheck;
+  /** check: seconds between checks (60..86400, default 300). */
+  intervalSeconds?: number;
+  /** check: give up after this (ISO; default 7 days, at most 30). cron: last firing before this. */
+  until?: IsoTime;
+  failPrompt?: string;
+}
+
+/** A message waiting for the task's agent (GET /api/session/inbox). */
+export interface InboxMessage {
+  id: string;
+  source: "wakeup";
+  sourceId: string;
+  text: string;
+  createdAt: IsoTime;
+}
+export interface InboxList {
+  messages: InboxMessage[];
+}
+
+/** A task's channel: what its agent posted for its owner (results, reports). */
+export interface ChannelPostView {
+  id: string;
+  taskId: string;
+  userId: string;
+  title: string;
+  /** Markdown, ≤ 20000 characters. */
+  text: string;
+  createdAt: IsoTime;
+  read: boolean;
+}
+
+/** POST /api/session/posts */
+export interface SessionPostRequest {
+  title?: string;
+  text: string;
+}
+
+/** GET /api/tasks/:id/posts */
+export interface ChannelPostList {
+  posts: ChannelPostView[];
+}
+
+/** One channel per task that has posts (GET /api/channels). */
+export interface ChannelView {
+  taskId: string;
+  userId: string;
+  taskTitle: string;
+  taskState: TaskState;
+  scheduleId: string | null;
+  posts: number;
+  unread: number;
+  lastPost: ChannelPostView;
+}
+export interface ChannelList {
+  channels: ChannelView[];
+}
+
+/** POST /api/tasks/:id/posts/read */
+export interface MarkPostsReadResult {
+  unreadPosts: number;
+}

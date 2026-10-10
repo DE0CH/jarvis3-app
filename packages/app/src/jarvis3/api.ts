@@ -6,10 +6,14 @@ import type {
   ArchiveLink,
   ApprovalList,
   ApprovalView,
+  ChannelList,
+  ChannelPostList,
+  CreateScheduleRequest,
   CreateTaskRequest,
   DecideRequest,
   MarkNoticesReadRequest,
   MarkNoticesReadResult,
+  MarkPostsReadResult,
   MeView,
   ModelList,
   NoticeList,
@@ -17,6 +21,12 @@ import type {
   PersonalNote,
   PutSkillRequest,
   ResetResult,
+  ScheduleDetail,
+  ScheduleList,
+  SchedulePreview,
+  SchedulePreviewRequest,
+  ScheduleRunNowResult,
+  ScheduleView,
   SetInstructionsRequest,
   SetLimitsRequest,
   SuggestionList,
@@ -25,8 +35,11 @@ import type {
   TaskList,
   TaskView,
   ToolsAdminView,
+  UpdateScheduleRequest,
   UserDetail,
   UserList,
+  WakeupList,
+  WakeupView,
 } from "./api-types";
 import { errorFromResponse, isAccessRefusal, Jarvis3Error } from "./plan";
 
@@ -37,6 +50,8 @@ export interface Jarvis3ApiDeps {
   /** "include" on the web (same origin, the Access cookie), "omit" on iOS. */
   credentials: "include" | "omit";
   fetch: typeof fetch;
+  /** The device's IANA time zone, sent as `X-Time-Zone` (schedules and wakeups use it). */
+  timeZone?: () => string | null;
 }
 
 export type Jarvis3Api = ReturnType<typeof createJarvis3Api>;
@@ -47,6 +62,8 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
     if (!base) throw new Jarvis3Error("This app has no instance URL.", 0, "signed_out");
     const headers: Record<string, string> = { Accept: "application/json", ...deps.authHeaders() };
     if (body !== undefined) headers["Content-Type"] = "application/json";
+    const zone = deps.timeZone?.();
+    if (zone) headers["X-Time-Zone"] = zone;
     let response: Response;
     try {
       response = await deps.fetch(base + path, {
@@ -139,6 +156,27 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
       call<ApprovalView>("GET", `/api/approvals/${id(approvalId)}`),
     decideApproval: (approvalId: string, request: DecideRequest) =>
       call<ApprovalView>("POST", `/api/approvals/${id(approvalId)}/decide`, request),
+
+    // Scheduled tasks, wakeups and channels (docs/API.md section 15).
+    listSchedules: () => call<ScheduleList>("GET", "/api/schedules"),
+    getSchedule: (scheduleId: string) =>
+      call<ScheduleDetail>("GET", `/api/schedules/${id(scheduleId)}`),
+    createSchedule: (request: CreateScheduleRequest) =>
+      call<ScheduleView>("POST", "/api/schedules", request),
+    updateSchedule: (scheduleId: string, request: UpdateScheduleRequest) =>
+      call<ScheduleView>("PATCH", `/api/schedules/${id(scheduleId)}`, request),
+    deleteSchedule: (scheduleId: string) =>
+      call<unknown>("DELETE", `/api/schedules/${id(scheduleId)}`),
+    runSchedule: (scheduleId: string) =>
+      call<ScheduleRunNowResult>("POST", `/api/schedules/${id(scheduleId)}/run`),
+    previewSchedule: (request: SchedulePreviewRequest) =>
+      call<SchedulePreview>("POST", "/api/schedules/preview", request),
+    listWakeups: (taskId: string) => call<WakeupList>("GET", `/api/wakeups?taskId=${id(taskId)}`),
+    cancelWakeup: (wakeupId: string) => call<WakeupView>("DELETE", `/api/wakeups/${id(wakeupId)}`),
+    listChannels: () => call<ChannelList>("GET", "/api/channels"),
+    listPosts: (taskId: string) => call<ChannelPostList>("GET", `/api/tasks/${id(taskId)}/posts`),
+    markPostsRead: (taskId: string) =>
+      call<MarkPostsReadResult>("POST", `/api/tasks/${id(taskId)}/posts/read`),
 
     listUsers: () => call<UserList>("GET", "/api/users"),
     /** Admin: the instance's Tier 0 providers and this month's totals. */

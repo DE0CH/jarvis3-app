@@ -5,8 +5,8 @@ import { StyleSheet } from "react-native-unistyles";
 import { SettingsCard, SettingsRow, SettingsSection } from "@/components/settings";
 import { Button } from "@/components/ui/button";
 import type { TaskView } from "../api-types";
-import { tasksStore } from "../client";
-import { useAccount, useTasks } from "../hooks";
+import { taskExtrasStore, tasksStore } from "../client";
+import { useAccount, useTaskExtras, useTasks } from "../hooks";
 import { myUsageRows, orderTasks, presentTask } from "../plan";
 import { pruneTaskHosts } from "../task-host";
 import { Banner, CenteredDialog, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
@@ -29,6 +29,10 @@ export function TaskListScreen() {
     tasksStore.activate();
     return () => tasksStore.deactivate();
   }, []);
+  const schedulesOn = useAccount().me?.features?.schedules === true;
+  useEffect(() => {
+    if (schedulesOn) void taskExtrasStore.loadChannels();
+  }, [schedulesOn]);
 
   // Forget the Paseo hosts of tasks that were deleted (a paused task keeps its host).
   const liveIds = useMemo(
@@ -134,6 +138,11 @@ function TaskRow({
   const resume = useCallback(() => void tasksStore.resume(task.id), [task.id]);
   const pause = useCallback(() => void tasksStore.pause(task.id), [task.id]);
   const remove = useCallback(() => onDelete(task), [onDelete, task]);
+  const channel = useTaskExtras().channels.find((c) => c.taskId === task.id) ?? null;
+  const openChannel = useCallback(
+    () => router.push(`/channels/${encodeURIComponent(task.id)}` as Href),
+    [router, task.id],
+  );
   return (
     <View style={styles.row} testID={`jarvis3-task-${task.id}`}>
       <Pressable
@@ -157,8 +166,19 @@ function TaskRow({
             {view.detail}
           </Text>
         ) : null}
+        {task.scheduleId ? <Text style={styles.meta}>From a schedule</Text> : null}
       </Pressable>
       <View style={styles.actions}>
+        {channel ? (
+          <Button
+            variant={channel.unread > 0 ? "default" : "ghost"}
+            size="sm"
+            onPress={openChannel}
+            testID={`jarvis3-task-channel-${task.id}`}
+          >
+            {channel.unread > 0 ? `${channel.unread} new posts` : "Channel"}
+          </Button>
+        ) : null}
         {view.canResume ? (
           <Button
             variant="outline"
@@ -239,6 +259,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   detail: {
     color: theme.colors.statusDanger,
+    fontSize: theme.fontSize.sm,
+  },
+  meta: {
+    color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
   },
   actions: {

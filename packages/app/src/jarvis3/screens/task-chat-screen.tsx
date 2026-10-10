@@ -21,12 +21,14 @@ import {
 import { useSessionStore } from "@/stores/session-store";
 import type { TaskView } from "../api-types";
 import { REFRESH_TASK_APPROVALS_MS } from "../approvals";
-import { approvalsStore, jarvis3Api, tasksStore } from "../client";
-import { useApprovals } from "../hooks";
+import { approvalsStore, jarvis3Api, taskExtrasStore, tasksStore } from "../client";
+import { useAccount, useApprovals, useTaskExtras } from "../hooks";
+import { REFRESH_TASK_EXTRAS_MS, taskExtrasLine } from "../schedules";
 import { type ChatPhase, Jarvis3Error, planTaskChat, presentTask, taskAgentOnHost } from "../plan";
 import { messageOf, REFRESH_WHILE_CHANGING_MS } from "../stores";
 import { ensureTaskHost, findTaskHost } from "../task-host";
 import { Banner, EmptyState, Jarvis3Frame, StatusPill } from "../ui";
+import { formatWhen } from "./format";
 
 const SETTLED: ReadonlySet<ChatPhase["kind"]> = new Set(["chat", "not_found", "paused", "closed"]);
 
@@ -168,6 +170,7 @@ export function TaskChatScreen({ taskId }: { taskId: string }) {
       {actionError ? <Banner tone="error">{actionError}</Banner> : null}
       {task?.error ? <Banner tone="error">{task.error}</Banner> : null}
       <TaskApprovalNotice taskId={taskId} />
+      <TaskExtrasNotice taskId={taskId} />
       <ChatPhaseView
         phase={phase}
         workspaceId={agentWorkspaceId}
@@ -207,6 +210,41 @@ function TaskApprovalNotice({ taskId }: { taskId: string }) {
         : `Waiting for your decision: ${first.preview.summary}`}
       <Button variant="outline" size="sm" onPress={review} testID="jarvis3-chat-approval-review">
         Review
+      </Button>
+    </Banner>
+  );
+}
+
+/** One line with the task's channel posts and its next wakeup, linking to its channel page. */
+function TaskExtrasNotice({ taskId }: { taskId: string }) {
+  const router = useRouter();
+  const enabled = useAccount().me?.features?.schedules === true;
+  const extras = useTaskExtras();
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const refresh = () => {
+      void taskExtrasStore.loadChannels();
+      void taskExtrasStore.loadWakeups(taskId);
+    };
+    refresh();
+    const timer = setInterval(refresh, REFRESH_TASK_EXTRAS_MS);
+    return () => clearInterval(timer);
+  }, [enabled, taskId]);
+  const open = useCallback(
+    () => router.push(`/channels/${encodeURIComponent(taskId)}` as Href),
+    [router, taskId],
+  );
+  const line = taskExtrasLine({
+    channel: extras.channels.find((c) => c.taskId === taskId) ?? null,
+    wakeups: extras.wakeups[taskId]?.wakeups ?? [],
+    formatWhen,
+  });
+  if (!enabled || !line) return null;
+  return (
+    <Banner tone="info" testID="jarvis3-chat-extras">
+      {line}
+      <Button variant="outline" size="sm" onPress={open} testID="jarvis3-chat-channel">
+        Channel
       </Button>
     </Banner>
   );
