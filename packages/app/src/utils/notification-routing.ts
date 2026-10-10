@@ -1,5 +1,6 @@
 import type { Href } from "expo-router";
 import { buildHostRootRoute, buildHostWorkspaceOpenRoute } from "@/utils/host-routes";
+import { pushRoute as jarvis3PushRoute } from "@/jarvis3/push";
 
 type NotificationData = Record<string, unknown> | null | undefined;
 type NotificationRoute = Extract<Href, string>;
@@ -28,6 +29,9 @@ export function resolveNotificationTarget(data: NotificationData): {
 }
 
 export function buildNotificationRoute(data: NotificationData): NotificationRoute {
+  // Jarvis 3: a notice pushed by the instance opens its own screen (null for every other push)
+  const jarvis3 = jarvis3PushRoute(data);
+  if (jarvis3) return jarvis3 as NotificationRoute;
   const { serverId, agentId, workspaceId, terminalId } = resolveNotificationTarget(data);
   if (serverId && workspaceId && agentId) {
     return buildHostWorkspaceOpenRoute(serverId, workspaceId, `agent:${agentId}`);

@@ -1,4 +1,4 @@
-// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit bdaa74d); refresh with
+// Vendored from DE0CH/jarvis3 server/src/api-types.ts (commit a0e0fe4); refresh with
 // scripts/jarvis3-sync-api-types.sh. Type-only: never add runtime code here.
 // The Jarvis 3 instance API contract: request and response shapes of every route.
 // docs/API.md describes the routes and who may call them; this module is the machine-checked
@@ -122,6 +122,11 @@ export interface InstanceFeatures {
   search?: boolean;
   /** Scheduled tasks, wakeups and channels (section 15). Optional: absent on older servers. */
   schedules?: boolean;
+  /**
+   * Push notifications for notices (section 16): which channels the instance can send through.
+   * Absent on older servers and when the instance has no push keys.
+   */
+  push?: { apns: boolean; webPush: boolean };
 }
 
 /** GET /api/users (admin) */
@@ -190,15 +195,7 @@ export interface ModelList {
  * archived   final; the archive holds the state
  * failed     the machine could not be created; only Destroy is possible
  */
-export type TaskState =
-  | "starting"
-  | "running"
-  | "idle"
-  | "pausing"
-  | "paused"
-  | "destroying"
-  | "archived"
-  | "failed";
+export type TaskState = "starting" | "running" | "idle" | "pausing" | "paused" | "destroying" | "archived" | "failed";
 
 export interface TaskView {
   id: string;
@@ -701,14 +698,7 @@ export type ApprovalLevel = "auto" | "self" | "admin" | "owner";
  * denied    refused (`decision.note` says why)
  * cancelled the task stopped (paused, destroyed or offboarded) before a decision
  */
-export type ApprovalState =
-  | "pending"
-  | "approved"
-  | "executing"
-  | "done"
-  | "failed"
-  | "denied"
-  | "cancelled";
+export type ApprovalState = "pending" | "approved" | "executing" | "done" | "failed" | "denied" | "cancelled";
 
 /** Exactly what will happen, for the person deciding. */
 export interface ApprovalPreview {
@@ -814,24 +804,11 @@ export interface Health {
 
 /** Frames the server sends to the session's channel agent. */
 export type ServerToSessionFrame =
-  | {
-      type: "ws-open";
-      id: string;
-      path: string;
-      protocols: string[];
-      headers: Record<string, string>;
-    }
+  | { type: "ws-open"; id: string; path: string; protocols: string[]; headers: Record<string, string> }
   | { type: "ws-msg"; id: string; text?: string; data_b64?: string }
   | { type: "ws-close"; id: string; code?: number; reason?: string }
   /** An HTTP request to the local daemon (the HTTP relay). Body ≤ 1 MiB, base64. */
-  | {
-      type: "http-req";
-      id: string;
-      method: string;
-      path: string;
-      headers: Record<string, string>;
-      body_b64?: string;
-    }
+  | { type: "http-req"; id: string; method: string; path: string; headers: Record<string, string>; body_b64?: string }
   /** The app went away: stop sending the response of request `id`. */
   | { type: "http-cancel"; id: string }
   | { type: "pong" };
@@ -874,13 +851,7 @@ export interface ScheduleView {
  * machine-hour cap, the instance budget, the previous run's task still live, or the server was
  * down at the time (`missed`). `failed`: the task could not be made (`error`).
  */
-export type ScheduleRunResult =
-  | "started"
-  | "skipped_cap"
-  | "skipped_budget"
-  | "skipped_overlap"
-  | "missed"
-  | "failed";
+export type ScheduleRunResult = "started" | "skipped_cap" | "skipped_budget" | "skipped_overlap" | "missed" | "failed";
 
 export interface ScheduleRunView {
   id: number;
@@ -1072,4 +1043,91 @@ export interface ChannelList {
 /** POST /api/tasks/:id/posts/read */
 export interface MarkPostsReadResult {
   unreadPosts: number;
+}
+
+// ---- push notifications (section 16) ---------------------------------------------------------------
+
+/**
+ * What a person can switch push off for. Each notice kind maps to one: an approval_needed notice
+ * about a question ("ask the boss") is `question`; the cap and budget notices are `caps`; offboarding,
+ * suggestions and passkeys are `other`.
+ */
+export type PushKind =
+  | "approval_needed"
+  | "question"
+  | "approval_decided"
+  | "channel_post"
+  | "caps"
+  | "schedule_skipped"
+  | "wakeup"
+  | "task_failed"
+  | "other";
+
+export interface PushKindView {
+  kind: PushKind;
+  /** What the settings screen shows ("Approvals waiting for you"). */
+  label: string;
+  /** Whether the caller gets pushes of this kind (default true). */
+  enabled: boolean;
+}
+
+/** One device or browser that receives the caller's pushes. */
+export interface PushSubscriptionView {
+  id: string;
+  /** apns: the iOS app; web: a browser or a web app added to a home screen (Web Push). */
+  kind: "apns" | "web";
+  /** A name for the person ("iPhone · iOS 26.1", "Chrome on macOS"). */
+  label: string;
+  /** The paired device it belongs to (iOS), else null. Revoking the device removes it. */
+  deviceId: string | null;
+  createdAt: IsoTime;
+  /** The last push the server sent to it, and the last one the push service accepted. */
+  lastSentAt: IsoTime | null;
+  lastOkAt: IsoTime | null;
+  /** The push service's answer when the last send failed ("BadDeviceToken (400, production)"), else null. */
+  lastError: string | null;
+}
+
+/** GET /api/push: the caller's push settings. PUT /api/push/kinds and the subscription routes answer it too. */
+export interface PushSettings {
+  /** The instance can send to the iOS app (APNs keys configured). */
+  apns: boolean;
+  /** The VAPID public key (base64url) a browser subscribes with; null = no Web Push on this instance. */
+  webPushPublicKey: string | null;
+  kinds: PushKindView[];
+  /** The caller's own subscriptions, newest first. */
+  subscriptions: PushSubscriptionView[];
+}
+
+/** PUT /api/push/kinds: switch kinds on or off; a kind left out is unchanged. */
+export interface SetPushKindsRequest {
+  kinds: Partial<Record<PushKind, boolean>>;
+}
+
+/**
+ * POST /api/push/subscriptions. Registering an address (a Web Push endpoint or an APNs device token)
+ * that is already registered moves it to the caller: the device or browser now belongs to them.
+ */
+export type CreatePushSubscriptionRequest =
+  | {
+      kind: "web";
+      /** PushSubscription.endpoint: an https URL on a known push service. */
+      endpoint: string;
+      /** PushSubscription keys, base64url. */
+      keys: { p256dh: string; auth: string };
+      label?: string;
+    }
+  | {
+      kind: "apns";
+      /** The APNs device token, hex. Only from a paired device (the iOS app). */
+      token: string;
+      /** Which APNs environment the token belongs to (a simulator or a development build: sandbox). Default production. */
+      environment?: "production" | "sandbox";
+      label?: string;
+    };
+
+/** POST /api/push/test: a test push to every subscription of the caller. */
+export interface PushTestResult {
+  /** One entry per subscription, after the push service answered. */
+  results: { id: string; ok: boolean; error: string | null }[];
 }

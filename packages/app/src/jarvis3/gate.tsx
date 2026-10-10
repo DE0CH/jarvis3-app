@@ -2,10 +2,12 @@
 // for the one-time sign-in (device pairing); then it loads who the user is.
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { Platform, Text, View } from "react-native";
-import { Redirect } from "expo-router";
+import { Redirect, useRouter, type Href } from "expo-router";
 import { StyleSheet } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
-import { accountStore } from "./client";
+import { accountStore, pushStore } from "./client";
+import { onPushOpen, pushDevice } from "./push-device";
+import type { MeView } from "./api-types";
 import { isJarvis3 } from "./config";
 import { forgetDevice, isFreshlyPaired, loadDevice, pairDevice } from "./device";
 import { useAccount, useDevice } from "./hooks";
@@ -69,7 +71,35 @@ function Jarvis3GateContent({ children }: { children: ReactNode }): ReactNode {
       </Centered>
     );
   }
-  return children;
+  return (
+    <>
+      {children}
+      <PushBridge me={account.me} />
+    </>
+  );
+}
+
+let resynced = false;
+
+/**
+ * Push notifications while the app runs: a device that is on registers again once per launch (its
+ * APNs token or browser subscription may have changed), the app badge follows the unread count,
+ * and a tapped web notification opens its screen.
+ */
+function PushBridge({ me }: { me: MeView }): null {
+  const router = useRouter();
+  const push = me.features?.push;
+  const unread = me.unreadNotices;
+  useEffect(() => {
+    if (!push || resynced) return;
+    resynced = true;
+    void pushStore.resync();
+  }, [push]);
+  useEffect(() => {
+    if (push) void pushDevice.setBadge(unread);
+  }, [push, unread]);
+  useEffect(() => onPushOpen((route) => router.navigate(route as Href)), [router]);
+  return null;
 }
 
 function retryAccount(): void {
