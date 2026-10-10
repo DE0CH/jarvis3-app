@@ -195,6 +195,10 @@ Pitfalls:
   certificate on every fresh runner, and once the team reaches Apple's certificate limit the archive
   fails with "Choose a certificate to revoke". Revoking old ones is not a fix: a development-signed
   app installed from one of them stops launching.
+- Ad-hoc sign the simulator build (`CODE_SIGN_IDENTITY=-`), never `CODE_SIGNING_ALLOWED=NO`. An
+  unsigned app has no entitlements, so the simulator keychain refuses expo-secure-store's write of
+  the device token ("A required entitlement isn't present") and pairing fails right after the mock
+  sign-in, which looks like a flaky Maestro assertion.
 - `APP_VARIANT=jarvis3` must be set for every step. Xcode's "Bundle React Native code" phase
   re-reads `app.config.js`; without it the app embeds upstream's config.
 - Build with Xcode 26. An app linked against the iOS 27 SDK must adopt the UIScene life cycle, and

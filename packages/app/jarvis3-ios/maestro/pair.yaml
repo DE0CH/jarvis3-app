@@ -37,6 +37,10 @@ appId: ${APP_ID}
     timeout: 30000
 - takeScreenshot: 2-mock-sign-in
 - tapOn: "Sign in as alice@example.org"
+# Let the sheet's SafariViewService exit before the next hierarchy query: querying it while it
+# shuts down fails Maestro's XCTest driver ("SafariViewService is not running") and the run dies.
+- waitForAnimationToEnd:
+    timeout: 10000
 - extendedWaitUntil:
     visible: "Draft the Q3 supplier summary"
     timeout: 60000
