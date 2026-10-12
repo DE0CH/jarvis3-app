@@ -200,7 +200,8 @@ test("the composer picks Projects; the chat names them; a clash is refused", asy
   const input = visible(page, "jarvis3-composer-input");
   await input.fill("Fix the footer links on the site");
   await input.press("Enter");
-  await expect(page).toHaveURL(/\/chats\/new0+1$/);
+  // task and Project ids share the mock's counter
+  await expect(page).toHaveURL(/\/chats\/new[0-9a-f]+$/);
   expect(instance.state.createRequests.at(-1)?.projects).toEqual([website?.id, "p-handbook"]);
   await expect(visible(page, "jarvis3-chat-projects")).toHaveText(
     "Projects: Website, Staff handbook",

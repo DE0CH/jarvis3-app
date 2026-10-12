@@ -335,12 +335,12 @@ test("admin: a person's channels from the Users page, read-only, nothing marked 
   await signIn(context, "admin@example.org");
   await page.goto(`${instance.url}/admin/users`);
   // on the admin's own row a channel's count is just "unread" ("unread by them" on others')
-  await page.getByTestId("jarvis3-user-u-admin").getByText("Tasks & layer").click();
+  await page.getByTestId("jarvis3-user-u-admin").getByText("Chats & layer").click();
   const own = page.getByTestId("jarvis3-user-records-u-admin");
   await expect(own).toContainText("Admin's weekly check");
   await expect(own).toContainText("1 post, 1 unread");
   await expect(own).not.toContainText("unread by them");
-  await page.getByTestId("jarvis3-user-u-alice").getByText("Tasks & layer").click();
+  await page.getByTestId("jarvis3-user-u-alice").getByText("Chats & layer").click();
   const records = page.getByTestId("jarvis3-user-records-u-alice");
   await expect(records).toContainText(TASK_TITLE);
   await expect(records).toContainText("2 posts, 1 unread by them");

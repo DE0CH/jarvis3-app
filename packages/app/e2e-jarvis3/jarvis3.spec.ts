@@ -482,6 +482,8 @@ test("an admin sees users and their limits, from the profile menu", async ({ pag
 test("notices: the unread count is in the sidebar and clears once they're seen", async ({
   page,
 }) => {
+  // the sidebar test above opened Notices (which marks them read): unread again
+  for (const n of instance.state.notices.get("u-alice") ?? []) n.read = false;
   await page.goto(`${instance.url}/`);
   await expect(sidebar(page).getByTestId("jarvis3-nav-notices-count")).toHaveText("2");
   await sidebar(page).getByTestId("jarvis3-nav-notices").click();
