@@ -107,7 +107,8 @@ export function listFolder(files: readonly FileView[], dir: string): FolderListi
     folders: [...folders.values()].slice().sort(byName),
     files: own
       .map((file) => ({ file, name: baseName(file.path) }))
-      .slice().sort(byName)
+      .slice()
+      .sort(byName)
       .map((entry) => entry.file),
   };
 }
@@ -219,7 +220,8 @@ export function chooserFiles(files: readonly FileView[], filter: string): FileVi
   const needle = filter.trim().toLowerCase();
   return files
     .filter((file) => !needle || file.path.toLowerCase().includes(needle))
-    .slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.path.localeCompare(b.path));
+    .slice()
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.path.localeCompare(b.path));
 }
 
 /**

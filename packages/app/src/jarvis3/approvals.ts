@@ -79,10 +79,12 @@ export function splitQueue(approvals: ApprovalView[]): {
 } {
   const pending = approvals
     .filter(isDecidableNow)
-    .slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const recent = approvals
     .filter((approval) => !isDecidableNow(approval))
-    .slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .slice()
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return { pending, recent };
 }
 

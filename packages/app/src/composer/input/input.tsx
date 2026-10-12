@@ -1820,7 +1820,8 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
               onSelectionChange={handleSelectionChange}
               onPasteImages={onPasteImages}
               onPasteError={handlePasteError}
-              focusHintVisible={isWeb && !isInputFocused && !value}
+              // jarvis3: no keyboard hint on a phone-sized window
+              focusHintVisible={isWeb && !isInputFocused && !value && !(isJarvis3 && isCompact)}
               focusInputKeys={focusInputKeys}
               focusHintLabel={t("composer.input.focusHint", {
                 shortcut: focusInputKeys ? formatShortcut(focusInputKeys[0], getShortcutOs()) : "",

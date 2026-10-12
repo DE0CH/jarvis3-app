@@ -341,7 +341,7 @@ export function myUsageRows(me: Pick<UserDetail, "limits" | "usage" | "tools">):
     {
       key: "machine",
       label: "Machine time",
-      value: `${usage.machineHours.toFixed(1)} h of ${formatLimit(limits.machineHoursPerMonth, "hours")}`,
+      value: `${formatMachineTime(usage.machineHours)} of ${formatLimit(limits.machineHoursPerMonth, "hours")}`,
       capReached: usage.machineHoursCapReached,
     },
   ];
@@ -389,12 +389,18 @@ export function describeToolsAdmin(view: ToolsAdminView): string | null {
   return parts.join(" ");
 }
 
+/** Machine time used: minutes under an hour ("12 min"), hours with one decimal above. */
+export function formatMachineTime(hours: number): string {
+  if (hours < 1) return `${Math.round(hours * 60)} min`;
+  return `${hours.toFixed(1)} h`;
+}
+
 /** The admin's one-line summary of a user's model spend and machine time this month. */
 export function describeUsage(detail: Pick<UserDetail, "limits" | "usage">): string {
   const { limits, usage } = detail;
   const own = " (set for this user)";
   const model = `Model spend ${formatLimit(limits.openrouterMonthlyUsd, "usd")}${limits.openrouterOverride ? own : ""}`;
-  const hours = `machine time ${usage.machineHours.toFixed(1)} h of ${formatLimit(limits.machineHoursPerMonth, "hours")}${limits.machineHoursOverride ? own : ""}`;
+  const hours = `machine time ${formatMachineTime(usage.machineHours)} of ${formatLimit(limits.machineHoursPerMonth, "hours")}${limits.machineHoursOverride ? own : ""}`;
   const cap = usage.machineHoursCapReached ? " Machine-hour cap reached." : "";
   return `${model}; ${hours} in ${usage.month}.${cap}`;
 }

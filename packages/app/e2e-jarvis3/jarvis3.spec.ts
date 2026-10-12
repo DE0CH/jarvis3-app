@@ -62,7 +62,16 @@ function notice(id: string, text: string, taskId: string | null): NoticeView {
 function history(agentId: string): TranscriptEntry[] {
   const at = (m: number) => new Date(Date.UTC(2026, 9, 1, 9, m)).toISOString();
   return [
-    { agentId, seq: 1, role: "user", text: "Reconcile the September invoices", at: at(0) },
+    {
+      agentId,
+      seq: 1,
+      role: "user",
+      // as the session sends a first message with an attachment: the note becomes a file chip
+      text:
+        "Reconcile the September invoices\n\nThe user attached a file to this message (copied into /home/jarvis/workspace/attachments/):\n" +
+        '- /home/jarvis/workspace/attachments/sept.csv (text/csv, 812 bytes; "attachments/r1/sept.csv" in their files)',
+      at: at(0),
+    },
     { agentId, seq: 2, role: "tool", text: "bash — ls invoices/ — sept.csv", at: at(1) },
     {
       agentId,
@@ -311,6 +320,8 @@ test("Rename (from the chat's menu) and Delete (from the sidebar)", async ({ pag
 test("a sleeping chat shows its history, and wakes when you type", async ({ page }) => {
   await page.goto(`${instance.url}/chats/${PAUSED}`);
   await expect(page.getByTestId("jarvis3-history")).toContainText("42 invoices");
+  await expect(page.getByTestId("jarvis3-history")).toContainText("sept.csv");
+  await expect(page.getByTestId("jarvis3-history")).not.toContainText("copied into");
   await expect(
     page.getByTestId("tool-call-badge").filter({ hasText: "Ran a command" }),
   ).toBeVisible();

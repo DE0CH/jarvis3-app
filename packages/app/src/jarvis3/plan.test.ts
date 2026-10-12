@@ -12,6 +12,7 @@ import {
   suggestionTargetLabel,
   errorFromResponse,
   formatLimit,
+  formatMachineTime,
   isAccessRefusal,
   isLayerEmpty,
   Jarvis3Error,
@@ -71,6 +72,14 @@ describe("resolveInstanceUrl", () => {
   });
   it("is null when nothing is known", () => {
     expect(resolveInstanceUrl({ platform: "ios", extraUrl: undefined, origin: null })).toBeNull();
+  });
+});
+
+describe("formatMachineTime", () => {
+  it("shows minutes under an hour, hours above", () => {
+    expect(formatMachineTime(0.05)).toBe("3 min");
+    expect(formatMachineTime(0)).toBe("0 min");
+    expect(formatMachineTime(3.25)).toBe("3.3 h");
   });
 });
 

@@ -1,6 +1,7 @@
 import { ASSISTANT_IMAGE_DEFAULT_ASPECT_RATIO } from "@/utils/assistant-image-metadata";
 import { isJarvis3 } from "@/jarvis3/config";
 import { stepLabel } from "@/jarvis3/steps";
+import { type AttachmentChip, splitAttachmentNote } from "@/jarvis3/attachment-note";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { TaskListRow } from "@/components/task-list-row";
 import {
@@ -45,6 +46,7 @@ import {
   Scissors,
   MicVocal,
   FileSymlink,
+  FileText,
 } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
@@ -169,6 +171,9 @@ const MARKDOWN_ALLOWED_IMAGE_HANDLERS = [
 const MARKDOWN_TOP_LEVEL_MAX_EXCEEDED_ITEM = <Text key="dotdotdot">...</Text>;
 
 const ThemedMicVocal = withUnistyles(MicVocal);
+const ThemedJarvis3File = withUnistyles(FileText);
+const jarvis3FileIconColor = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const jarvis3FileIcon = <ThemedJarvis3File size={ICON_SIZE.sm} uniProps={jarvis3FileIconColor} />;
 const ThemedFileSymlinkIcon = withUnistyles(FileSymlink);
 const ThemedTriangleAlertIcon = withUnistyles(TriangleAlertIcon);
 const ThemedChevronRightIcon = withUnistyles(ChevronRight);
@@ -453,9 +458,13 @@ export const UserMessage = memo(function UserMessage({
     [lightboxMetadata],
   );
   const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
-  const hasText = message.trim().length > 0;
+  // jarvis3: the session's note about the first message's attachments shows as file chips
+  const jarvis3Note = useMemo(() => (isJarvis3 ? splitAttachmentNote(message) : null), [message]);
+  const shownMessage = jarvis3Note ? jarvis3Note.text : message;
+  const jarvis3Files = jarvis3Note?.files ?? NO_JARVIS3_FILES;
+  const hasText = shownMessage.trim().length > 0;
   const hasImages = images.length > 0;
-  const hasAttachments = attachments.length > 0;
+  const hasAttachments = attachments.length > 0 || jarvis3Files.length > 0;
   const showTrailingRow = !isPending && hasText && (isCompact || isNative || isHovered);
   const formattedTimestamp = useMemo(
     () => formatMessageTimestamp(new Date(timestamp)),
@@ -465,7 +474,7 @@ export const UserMessage = memo(function UserMessage({
 
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
-  const getMessageContent = useCallback(() => message, [message]);
+  const getMessageContent = useCallback(() => shownMessage, [shownMessage]);
   const handleRewind = useCallback(
     (input: { mode: RewindMode; rewoundText: string }) => {
       return rewindMutation.rewindAgent(input);
@@ -544,11 +553,20 @@ export const UserMessage = memo(function UserMessage({
                   </AttachmentFrame>
                 );
               })}
+              {jarvis3Files.map((file) => (
+                <AttachmentFrame key={`jarvis3:${file.name}`}>
+                  <AttachmentLabel
+                    icon={jarvis3FileIcon}
+                    title={file.name}
+                    subtitle={file.failed ? "Not copied" : "Attached"}
+                  />
+                </AttachmentFrame>
+              ))}
             </View>
           ) : null}
           {hasText ? (
             <Text selectable style={userMessageStylesheet.text} dataSet={MESSAGE_TEXT_DATASET}>
-              {message}
+              {shownMessage}
             </Text>
           ) : null}
         </View>
@@ -3205,6 +3223,8 @@ export const ToolCall = memo(function ToolCall({
     />
   );
 }, areToolCallPropsEqual);
+
+const NO_JARVIS3_FILES: AttachmentChip[] = [];
 
 /** jarvis3: a step in plain words ("Ran a command"); null elsewhere and for unknown tools. */
 function jarvis3StepLabel(

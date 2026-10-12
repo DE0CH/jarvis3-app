@@ -72,7 +72,10 @@ function asJarvis3Error(error: unknown): Jarvis3Error {
 }
 
 function useChatTask(taskId: string) {
-  const [task, setTask] = useState<TaskView | null>(null);
+  // the list already has it (a chat just created, or opened from the sidebar): no "Loading…" flash
+  const [task, setTask] = useState<TaskView | null>(
+    () => tasksStore.get().tasks.find((t) => t.id === taskId) ?? null,
+  );
   const [loadError, setLoadError] = useState<Jarvis3Error | null>(null);
   const load = useCallback(() => {
     const run = async () => {

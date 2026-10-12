@@ -31,8 +31,8 @@ const PLAN = words("Updated the plan", "Updating the plan");
 const POST = words("Posted to the channel", "Posting to the channel");
 const WAKEUP = words("Set a wakeup", "Setting a wakeup");
 const APPROVAL = words("Asked for approval", "Asking for approval");
-const QUESTION = words("Asked you a question", "Asking you a question");
-const ACCESS = words("Asked for access", "Asking for access");
+const QUESTION = words("Asked an admin", "Asking an admin");
+const ACCESS = words("Asked an admin for access", "Asking an admin for access");
 const REMEMBER = words("Saved a note", "Saving a note");
 const FILES = words("Used your files", "Using your files");
 
