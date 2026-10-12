@@ -31,81 +31,16 @@ function stripSlash(url: string): string {
 
 export type Tone = "ok" | "busy" | "idle" | "error" | "muted";
 
-export interface TaskPresentation {
-  label: string;
-  tone: Tone;
-  canOpen: boolean;
-  canResume: boolean;
-  canPause: boolean;
-  /** A short explanation shown under the title, or null. */
-  detail: string | null;
-}
-
-const PAUSED_REASON: Record<NonNullable<TaskView["pausedReason"]>, string> = {
-  user: "Paused",
-  idle: "Paused after being idle",
-  machine_hours_cap: "Paused: your monthly machine hours are used up",
-  instance_budget: "Paused: the organisation's monthly budget is used up",
-  offboarded: "Paused: access was removed",
-};
-
-export function presentTask(task: TaskView): TaskPresentation {
-  const busy = task.busy !== null;
-  const base: TaskPresentation = {
-    label: stateLabel(task.state),
-    tone: "muted",
-    canOpen: false,
-    canResume: false,
-    canPause: false,
-    detail: task.error,
-  };
-  switch (task.state) {
-    case "starting":
-      return {
-        ...base,
-        tone: "busy",
-        label: busy && task.busy?.kind === "resuming" ? "Resuming…" : "Starting…",
-      };
-    case "running":
-      return { ...base, tone: "ok", canOpen: task.connected, canPause: !busy };
-    case "idle":
-      return { ...base, tone: "idle", canOpen: task.connected, canPause: !busy };
-    case "pausing":
-      return { ...base, tone: "busy" };
-    case "paused":
-      return {
-        ...base,
-        tone: "muted",
-        label: task.pausedReason ? PAUSED_REASON[task.pausedReason] : "Paused",
-        canResume: !busy && task.pausedReason !== "offboarded",
-      };
-    case "destroying":
-      return { ...base, tone: "busy" };
-    case "archived":
-      return { ...base, tone: "muted" };
-    case "failed":
-      return { ...base, tone: "error" };
-  }
-}
-
+/** A chat's state in words, where one is shown (search hits, an admin's view of someone's chats). */
 export function stateLabel(state: TaskState): string {
   switch (state) {
-    case "starting":
-      return "Starting…";
-    case "running":
-      return "Working";
-    case "idle":
-      return "Waiting for you";
-    case "pausing":
-      return "Pausing…";
-    case "paused":
-      return "Paused";
     case "destroying":
-      return "Deleting…";
     case "archived":
-      return "Archived";
+      return "Deleted";
     case "failed":
-      return "Could not start";
+      return "Couldn't start";
+    default:
+      return "Chat";
   }
 }
 
@@ -119,13 +54,6 @@ export function taskListNeedsRefresh(tasks: readonly TaskView[]): boolean {
       task.state === "destroying" ||
       ((task.state === "running" || task.state === "idle") && !task.connected),
   );
-}
-
-/** The list shown to the user: archived tasks last, otherwise the server's order (newest first). */
-export function orderTasks(tasks: readonly TaskView[]): TaskView[] {
-  const live = tasks.filter((task) => task.state !== "archived");
-  const archived = tasks.filter((task) => task.state === "archived");
-  return [...live, ...archived];
 }
 
 /** Replaces (or adds at the top) one task in a list, keeping the order otherwise. */
@@ -171,7 +99,7 @@ const FRIENDLY: Partial<Record<ErrorCode, string>> = {
   tools_cap: "This month's web-tools allowance is used up. Ask your admin to raise your limit.",
   too_many_requests: "Too many attempts. Try again in a minute.",
   upstream: "A provider didn't answer. Try again shortly.",
-  unavailable: "The task isn't connected yet.",
+  unavailable: "The chat isn't connected yet.",
   forbidden: "This account has no access to this instance.",
   device_revoked: "This device was signed out. Sign in again.",
   unauthenticated: "You're signed out.",
@@ -467,7 +395,7 @@ export function describeUsage(detail: Pick<UserDetail, "limits" | "usage">): str
   const own = " (set for this user)";
   const model = `Model spend ${formatLimit(limits.openrouterMonthlyUsd, "usd")}${limits.openrouterOverride ? own : ""}`;
   const hours = `machine time ${usage.machineHours.toFixed(1)} h of ${formatLimit(limits.machineHoursPerMonth, "hours")}${limits.machineHoursOverride ? own : ""}`;
-  const cap = usage.machineHoursCapReached ? " Machine-hour cap reached: tasks paused." : "";
+  const cap = usage.machineHoursCapReached ? " Machine-hour cap reached." : "";
   return `${model}; ${hours} in ${usage.month}.${cap}`;
 }
 
@@ -525,57 +453,6 @@ export function canDownloadArchive(task: Pick<TaskView, "state">): boolean {
 }
 
 // ---- the chat screen's phase --------------------------------------------------------------
-
-export type ChatPhase =
-  | { kind: "loading" }
-  | { kind: "not_found" }
-  | { kind: "error"; message: string }
-  | { kind: "starting"; label: string }
-  | { kind: "paused"; label: string; canResume: boolean }
-  | { kind: "closed"; label: string }
-  | { kind: "connect" }
-  | { kind: "connecting" }
-  | { kind: "waiting_agent" }
-  | { kind: "chat"; serverId: string; agentId: string };
-
-/**
- * What the task screen shows. `hostServerId` is the Paseo host already made for this task
- * (null until the app has probed the daemon through the proxy), `hostOnline` its connection,
- * `agentId` the task's agent once that host has it (taskAgentOnHost).
- */
-export function planTaskChat(input: {
-  task: TaskView | null;
-  loadError: Jarvis3Error | null;
-  hostServerId: string | null;
-  hostOnline: boolean;
-  agentId: string | null;
-}): ChatPhase {
-  const { task, loadError } = input;
-  if (!task) {
-    if (loadError?.code === "not_found") return { kind: "not_found" };
-    if (loadError) return { kind: "error", message: loadError.message };
-    return { kind: "loading" };
-  }
-  const view = presentTask(task);
-  switch (task.state) {
-    case "paused":
-      return { kind: "paused", label: view.label, canResume: view.canResume };
-    case "pausing":
-    case "destroying":
-    case "archived":
-    case "failed":
-      return { kind: "closed", label: view.label };
-    case "starting":
-      return { kind: "starting", label: view.label };
-    case "running":
-    case "idle":
-      if (!task.connected) return { kind: "starting", label: "Connecting to the task…" };
-      if (!input.hostServerId) return { kind: "connect" };
-      if (!input.hostOnline) return { kind: "connecting" };
-      if (!input.agentId) return { kind: "waiting_agent" };
-      return { kind: "chat", serverId: input.hostServerId, agentId: input.agentId };
-  }
-}
 
 // ---- signed out ---------------------------------------------------------------------------
 

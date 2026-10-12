@@ -2,8 +2,11 @@
 # Simulator test of the jarvis3 iOS build against the MOCK instance (e2e-jarvis3/mock-instance.ts),
 # never a real one: the app must have been built with JARVIS3_INSTANCE_URL=http://localhost:8090.
 # Maestro walks the real pairing flow (Sign in -> system sign-in sheet -> the mock's sign-in page ->
-# jarvis3://paired -> Keychain), checks the task list loads with the device token, relaunches
-# the app and checks it is still paired, then turns push notifications on (maestro/push.yaml). Screenshots (mock data only) go to $OUT.
+# jarvis3://paired -> Keychain), checks the app opens on an empty chat with the composer (loaded
+# with the device token), sends a first message (the chat opens with "Starting…" and shows in the
+# sidebar), relaunches the app and checks it is still paired, then turns push notifications on
+# (maestro/push.yaml). Every step's screenshot is checked for a blank screen (check-frames.py);
+# screenshots and a screen recording (mock data only) go to $OUT.
 # Usage: simulator-test.sh --boot              create and start booting the simulator, install Maestro
 #        simulator-test.sh <path to the .app>   env: JARVIS3_BUNDLE_ID
 # Run --boot at the start of the job: a fresh simulator's first boot (data migration, system apps)
@@ -61,20 +64,25 @@ nohup xcrun simctl spawn "$UDID" log stream --style compact --level info \
 # (default wait 2 min: "iOS driver not ready in time"), so wait longer and give the first flow a
 # second attempt; it starts from a clean install state either way.
 export MAESTRO_DRIVER_STARTUP_TIMEOUT=300000
+xcrun simctl io "$UDID" recordVideo --codec h264 --force "$OUT/run.mp4" > /dev/null 2>&1 &
+RECORDER=$!
 status=0
+checked=()
 for attempt in 1 2; do
   status=0
   maestro --device "$UDID" test --test-output-dir "$OUT/pair-$attempt" -e APP_ID="$JARVIS3_BUNDLE_ID" \
     "$HERE/maestro/pair.yaml" || status=$?
-  [[ $status -eq 0 ]] && break
+  [[ $status -eq 0 ]] && checked+=("$OUT/pair-$attempt") && break
 done
 if [[ $status -eq 0 ]]; then
   maestro --device "$UDID" test --test-output-dir "$OUT/relaunch" -e APP_ID="$JARVIS3_BUNDLE_ID" \
     "$HERE/maestro/relaunch.yaml" || status=$?
+  checked+=("$OUT/relaunch")
 fi
 if [[ $status -eq 0 ]]; then
   maestro --device "$UDID" test --test-output-dir "$OUT/push" -e APP_ID="$JARVIS3_BUNDLE_ID" \
     "$HERE/maestro/push.yaml" || status=$?
+  checked+=("$OUT/push")
   # Whether iOS gave the simulator an APNs token (the mock logs every registration). Not a failure
   # when it didn't: Apple's push service may not serve a simulator on a CI virtual machine.
   if grep -q "push subscription apns token=" "$OUT/mock-instance.log"; then
@@ -82,6 +90,12 @@ if [[ $status -eq 0 ]]; then
   else
     echo "no APNs token reached the mock instance"
   fi
+fi
+kill -INT "$RECORDER" 2> /dev/null || true
+wait "$RECORDER" 2> /dev/null || true
+# A step whose screen came out blank fails the run, even when Maestro found what it looked for.
+if [[ $status -eq 0 ]]; then
+  python3 "$HERE/check-frames.py" "${checked[@]}" || status=$?
 fi
 xcrun simctl io "$UDID" screenshot "$OUT/final.png" || true
 xcrun simctl shutdown "$UDID" || true

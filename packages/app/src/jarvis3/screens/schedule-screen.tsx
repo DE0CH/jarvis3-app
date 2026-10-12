@@ -85,7 +85,7 @@ function ExistingSchedule({ detail }: { detail: ScheduleDetail }) {
   }, [detail.id, router]);
   const startedTask = lastRunNow?.task ?? null;
   const openTask = useCallback(() => {
-    if (startedTask) router.push(`/tasks/${encodeURIComponent(startedTask.id)}` as Href);
+    if (startedTask) router.push(`/chats/${encodeURIComponent(startedTask.id)}` as Href);
   }, [router, startedTask]);
 
   const actions = useMemo(
@@ -111,10 +111,10 @@ function ExistingSchedule({ detail }: { detail: ScheduleDetail }) {
     <Jarvis3Frame title={detail.title} testID="jarvis3-schedule-page" actions={actions}>
       {lastRunNow ? (
         <Banner tone={startedTask ? "ok" : "info"} testID="jarvis3-schedule-ran">
-          {startedTask ? "Started a new task." : runResultLabel(lastRunNow.run).label}
+          {startedTask ? "Started a new chat." : runResultLabel(lastRunNow.run).label}
           {startedTask ? (
             <Button variant="outline" size="sm" onPress={openTask}>
-              Open task
+              Open chat
             </Button>
           ) : null}
         </Banner>
@@ -125,7 +125,7 @@ function ExistingSchedule({ detail }: { detail: ScheduleDetail }) {
         <SettingsCard>
           <SettingsRow
             label="Delete this schedule"
-            hint="Its run history goes too. The tasks it started stay in your task list."
+            hint="Its run history goes too. The chats it started stay in your chat list."
           >
             <Button
               variant="outline"
@@ -142,7 +142,7 @@ function ExistingSchedule({ detail }: { detail: ScheduleDetail }) {
       <CenteredDialog
         visible={deleting}
         title="Delete this schedule?"
-        message={`"${detail.title}" stops running. The tasks it already started stay.`}
+        message={`"${detail.title}" stops running. The chats it already started stay.`}
         confirmLabel="Delete"
         destructive
         busy={busy === "delete"}
@@ -159,7 +159,7 @@ function RunHistory({ runs }: { runs: ScheduleRunView[] }) {
     <SettingsSection title="Runs">
       {runs.length === 0 ? (
         <SettingsCard>
-          <SettingsRow label="No runs yet" hint="Each run starts a new task in your task list." />
+          <SettingsRow label="No runs yet" hint="Each run starts a new chat in your chat list." />
         </SettingsCard>
       ) : (
         <SettingsCard testID="jarvis3-schedule-runs">
@@ -177,7 +177,7 @@ function RunRow({ run }: { run: ScheduleRunView }) {
   const result = runResultLabel(run);
   const taskId = run.taskId;
   const open = useCallback(() => {
-    if (taskId) router.push(`/tasks/${encodeURIComponent(taskId)}` as Href);
+    if (taskId) router.push(`/chats/${encodeURIComponent(taskId)}` as Href);
   }, [router, taskId]);
   const pill = useMemo(() => <StatusPill tone={result.tone} label={result.label} />, [result]);
   const when = `${formatWhen(run.ranAt)}${run.manual ? " · started by hand" : ""}`;
@@ -190,7 +190,7 @@ function RunRow({ run }: { run: ScheduleRunView }) {
     >
       {taskId ? (
         <Button variant="ghost" size="sm" onPress={open}>
-          Open task
+          Open chat
         </Button>
       ) : null}
     </SettingsRow>
@@ -314,7 +314,7 @@ function ScheduleFormView({ schedule }: { schedule: ScheduleDetail | null }) {
           accessibilityLabel="Prompt"
           value={form.prompt}
           onChangeText={setPrompt}
-          placeholder="What the agent should do at each run, as you would ask a colleague. It posts the result to the task's channel."
+          placeholder="What the agent should do at each run, as you would ask a colleague. It posts the result to the chat's channel."
           testID="jarvis3-schedule-prompt"
           style={styles.prompt}
         />

@@ -1,7 +1,8 @@
-// Search: the user's own tasks' conversations (docs/API.md in DE0CH/jarvis3, "Transcript
-// search"), archived and paused tasks included. A hit opens the transcript around it. Admins can
-// search everyone's tasks.
-import { useCallback, useState } from "react";
+// Search (from the sidebar): chats whose name matches, as you type, and, when the instance has
+// transcript search, the words in the user's own chats' conversations (docs/API.md in
+// DE0CH/jarvis3, "Transcript search"), deleted ones included. A hit opens the transcript around
+// it. Admins can search everyone's chats.
+import { useCallback, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { StyleSheet } from "react-native-unistyles";
@@ -9,9 +10,11 @@ import { SettingsCard, SettingsRow } from "@/components/settings";
 import { Button } from "@/components/ui/button";
 import { FormTextInput } from "@/components/ui/form-field";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import type { SearchHit, SearchResult } from "../api-types";
+import type { SearchHit, SearchResult, TaskView } from "../api-types";
+import { filterChats } from "../chats";
+import { chatHref } from "../nav";
 import { jarvis3Api } from "../client";
-import { useAccount } from "../hooks";
+import { useAccount, useTasks } from "../hooks";
 import { stateLabel } from "../plan";
 import {
   groupHits,
@@ -28,6 +31,8 @@ import { formatWhen } from "./format";
 export function SearchScreen() {
   const account = useAccount();
   const isAdmin = account.me?.user.isAdmin === true;
+  const transcripts = account.me?.features?.search === true;
+  const tasks = useTasks();
   const compact = useIsCompactFormFactor();
   const [text, setText] = useState("");
   const [everyone, setEveryone] = useState(false);
@@ -38,7 +43,7 @@ export function SearchScreen() {
   const run = useCallback(
     (all: boolean) => {
       const q = normaliseQuery(text);
-      if (!q) return;
+      if (!q || !transcripts) return;
       const go = async () => {
         setSearching(true);
         setError(null);
@@ -52,8 +57,9 @@ export function SearchScreen() {
       };
       void go();
     },
-    [text],
+    [text, transcripts],
   );
+  const titleMatches = useMemo(() => filterChats(tasks.tasks, text), [tasks.tasks, text]);
   const submit = useCallback(() => run(everyone), [run, everyone]);
   const toggleEveryone = useCallback(() => {
     const next = !everyone;
@@ -65,8 +71,12 @@ export function SearchScreen() {
     <Jarvis3Frame title="Search" testID="jarvis3-search-screen">
       <SettingsCard>
         <SettingsRow
-          label="Search your tasks"
-          hint="Finds words in what you and the agents wrote, in every task, archived ones too."
+          label="Search your chats"
+          hint={
+            transcripts
+              ? "Finds chat names as you type, and words in what you and Jarvis wrote, in deleted chats too."
+              : "Finds chat names as you type."
+          }
         >
           {/* Enter (the keyboard's Search key on a phone) searches, like the button. */}
           <FormTextInput
@@ -75,35 +85,38 @@ export function SearchScreen() {
             onSubmitEditing={submit}
             returnKeyType="search"
             placeholder="supplier invoice"
-            accessibilityLabel="Search your tasks"
+            accessibilityLabel="Search your chats"
             size={compact ? "md" : "sm"}
             style={styles.input}
             testID="jarvis3-search-input"
           />
         </SettingsRow>
-        <View style={styles.controls}>
-          {isAdmin ? (
+        {transcripts ? (
+          <View style={styles.controls}>
+            {isAdmin ? (
+              <Button
+                variant={everyone ? "secondary" : "ghost"}
+                size="sm"
+                onPress={toggleEveryone}
+                testID="jarvis3-search-everyone"
+              >
+                {everyone ? "Everyone's chats" : "Only mine"}
+              </Button>
+            ) : null}
             <Button
-              variant={everyone ? "secondary" : "ghost"}
+              variant="default"
               size="sm"
-              onPress={toggleEveryone}
-              testID="jarvis3-search-everyone"
+              onPress={submit}
+              loading={searching}
+              disabled={!normaliseQuery(text)}
+              testID="jarvis3-search-submit"
             >
-              {everyone ? "Everyone's tasks" : "Only mine"}
+              Search
             </Button>
-          ) : null}
-          <Button
-            variant="default"
-            size="sm"
-            onPress={submit}
-            loading={searching}
-            disabled={!normaliseQuery(text)}
-            testID="jarvis3-search-submit"
-          >
-            Search
-          </Button>
-        </View>
+          </View>
+        ) : null}
       </SettingsCard>
+      {titleMatches.length ? <TitleMatches chats={titleMatches} /> : null}
       {error ? (
         <Banner tone="error" testID="jarvis3-search-error">
           {error}
@@ -111,6 +124,33 @@ export function SearchScreen() {
       ) : null}
       <Results result={result} everyone={everyone} />
     </Jarvis3Frame>
+  );
+}
+
+function TitleMatches({ chats }: { chats: TaskView[] }) {
+  return (
+    <SettingsCard testID="jarvis3-search-titles">
+      {chats.slice(0, 20).map((chat) => (
+        <TitleMatch key={chat.id} chat={chat} />
+      ))}
+    </SettingsCard>
+  );
+}
+
+function TitleMatch({ chat }: { chat: TaskView }) {
+  const router = useRouter();
+  const open = useCallback(() => router.replace(chatHref(chat.id) as Href), [router, chat.id]);
+  return (
+    <Pressable
+      onPress={open}
+      style={styles.titleRow}
+      accessibilityRole="link"
+      testID={`jarvis3-search-title-${chat.id}`}
+    >
+      <Text style={styles.taskTitle} numberOfLines={1}>
+        {chat.title}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -179,6 +219,10 @@ export function Snippet({ snippet, matches }: { snippet: string; matches: [numbe
 }
 
 const styles = StyleSheet.create((theme) => ({
+  titleRow: {
+    paddingVertical: theme.spacing[3],
+    paddingHorizontal: theme.spacing[4],
+  },
   input: { minWidth: 180 },
   controls: {
     flexDirection: "row",

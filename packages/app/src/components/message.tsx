@@ -1,4 +1,6 @@
 import { ASSISTANT_IMAGE_DEFAULT_ASPECT_RATIO } from "@/utils/assistant-image-metadata";
+import { isJarvis3 } from "@/jarvis3/config";
+import { stepLabel } from "@/jarvis3/steps";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { TaskListRow } from "@/components/task-list-row";
 import {
@@ -3062,7 +3064,8 @@ export const ToolCall = memo(function ToolCall({
   const [isExpanded, setIsExpanded] = useState(defaultExpanded ?? false);
 
   const isMobile = useIsCompactFormFactor();
-  const shouldRenderInline = !isMobile || forceInline;
+  // jarvis3: steps expand in place on phones too (that variant has no bottom sheets)
+  const shouldRenderInline = !isMobile || forceInline || isJarvis3;
 
   const effectiveDetail = useMemo<ToolCallDetail | undefined>(() => {
     if (detail) {
@@ -3187,7 +3190,7 @@ export const ToolCall = memo(function ToolCall({
   return (
     <ExpandableBadge
       testID="tool-call-badge"
-      label={presentation.displayName}
+      label={jarvis3StepLabel(toolName, effectiveDetail, status) ?? presentation.displayName}
       secondaryLabel={presentation.summary}
       icon={presentation.icon}
       isExpanded={shouldRenderInline && isExpanded}
@@ -3202,6 +3205,21 @@ export const ToolCall = memo(function ToolCall({
     />
   );
 }, areToolCallPropsEqual);
+
+/** jarvis3: a step in plain words ("Ran a command"); null elsewhere and for unknown tools. */
+function jarvis3StepLabel(
+  toolName: string,
+  detail: ToolCallDetail | undefined,
+  status: ToolCallProps["status"],
+): string | null {
+  if (!isJarvis3) return null;
+  return stepLabel({
+    toolName,
+    detailType: detail?.type ?? null,
+    searchKind: detail?.type === "search" ? (detail.toolName ?? null) : null,
+    running: status === "running" || status === "executing",
+  });
+}
 
 function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
   if (previous.toolName !== next.toolName) return false;

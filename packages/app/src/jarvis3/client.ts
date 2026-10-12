@@ -4,6 +4,8 @@ import { createJarvis3Api } from "./api";
 import { createPushStore } from "./push";
 import { pushDevice } from "./push-device";
 import { createApprovalsStore } from "./approvals";
+import { createChatMessagesStore } from "./chat-store";
+import { createProjectsStore } from "./projects";
 import { getInstanceUrl } from "./config";
 import { deviceHeaders } from "./device-token";
 import { nativeFileUploader } from "./upload-file";
@@ -38,5 +40,9 @@ export const approvalsStore = createApprovalsStore(jarvis3Api, accountStore);
 export const schedulesStore = createSchedulesStore(jarvis3Api);
 export const taskExtrasStore = createTaskExtrasStore(jarvis3Api, accountStore);
 export const pushStore = createPushStore(jarvis3Api, pushDevice);
+export const chatMessagesStore = createChatMessagesStore(jarvis3Api, {
+  onTask: (task) => tasksStore.upsert(task),
+});
+export const projectsStore = createProjectsStore(jarvis3Api);
 
 registerJarvis3InstanceUrl();

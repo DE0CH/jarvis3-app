@@ -46,6 +46,8 @@ function fixtures() {
     connected: false,
     agentId: null,
     scheduleId: SCHEDULE,
+    lastActivityAt: t,
+    projects: [],
   };
   // the admin's own task, with an unread post: the Users page words it as just "unread"
   const adminTask: TaskView = {
@@ -238,9 +240,11 @@ test("the schedules page, a new schedule with its preview, Run now, On/Off, Dele
   page,
   context,
 }) => {
+  // four screen sizes and schemes, each re-entering the form after the layout's remount
+  test.setTimeout(240_000);
   await signIn(context, "alice@example.org");
-  await page.goto(`${instance.url}/tasks`);
-  await page.getByTestId("jarvis3-nav-schedules").click();
+  await page.goto(`${instance.url}/`);
+  await page.getByTestId("jarvis3-nav-scheduled").click();
   await expect(page).toHaveURL(/\/scheduled$/);
   const row = page.getByTestId(`jarvis3-schedule-${SCHEDULE}`);
   await expect(row).toContainText("Supplier summary");
@@ -295,7 +299,7 @@ test("the schedules page, a new schedule with its preview, Run now, On/Off, Dele
 
   // Run now starts a task with the schedule's prompt; a second one is skipped (one at a time).
   await page.getByTestId("jarvis3-schedule-run").click();
-  await expect(page.getByTestId("jarvis3-schedule-ran")).toContainText("Started a new task.");
+  await expect(page.getByTestId("jarvis3-schedule-ran")).toContainText("Started a new chat.");
   const run = instance.state.tasks.find((t) => t.scheduleId === created?.id);
   expect(run?.title).toBe("Morning inbox digest · now");
   await page.getByTestId("jarvis3-schedule-run").click();
@@ -308,7 +312,7 @@ test("the schedules page, a new schedule with its preview, Run now, On/Off, Dele
   );
 
   // Off from the list.
-  await page.getByTestId("jarvis3-nav-schedules").click();
+  await page.getByTestId("jarvis3-nav-scheduled").click();
   await page.getByTestId(`jarvis3-schedule-toggle-${created?.id}`).click();
   await expect(page.getByTestId(`jarvis3-schedule-status-${created?.id}`)).toContainText("Off");
   expect(instance.state.schedules.find((s) => s.id === created?.id)?.enabled).toBe(false);
@@ -363,13 +367,12 @@ test("a task's channel and wakeups: posts read on opening, cancel a wakeup", asy
   context,
 }) => {
   await signIn(context, "alice@example.org");
-  await page.goto(`${instance.url}/tasks`);
-  const channelButton = page.getByTestId(`jarvis3-task-channel-${TASK}`);
-  await expect(channelButton).toHaveText("1 new post");
-  await expect(page.getByTestId(`jarvis3-task-${TASK}`)).toContainText("From a schedule");
+  await page.goto(`${instance.url}/`);
+  // A chat with unread channel posts has a dot in the sidebar.
+  await expect(page.getByTestId(`jarvis3-chat-unread-${TASK}`)).toBeVisible();
 
   // The chat's one-line summary links to the channel.
-  await page.getByTestId(`jarvis3-task-open-${TASK}`).click();
+  await page.getByTestId(`jarvis3-chat-row-${TASK}`).click();
   const extras = page.getByTestId("jarvis3-chat-extras");
   await expect(extras).toContainText("2 posts (1 new)");
   await expect(extras).toContainText("2 wakeups, next");
@@ -397,11 +400,12 @@ test("a task's channel and wakeups: posts read on opening, cancel a wakeup", asy
   await expect(page.getByTestId("jarvis3-wakeup-cancel-w-reply")).toHaveCount(0);
   expect(instance.state.wakeups.find((w) => w.id === "w-reply")?.state).toBe("cancelled");
 
-  await page.goto(`${instance.url}/tasks`);
-  await expect(page.getByTestId(`jarvis3-task-channel-${TASK}`)).toHaveText("Channel");
+  await page.goto(`${instance.url}/`);
+  await expect(page.getByTestId(`jarvis3-chat-row-${TASK}`)).toBeVisible();
+  await expect(page.getByTestId(`jarvis3-chat-unread-${TASK}`)).toHaveCount(0);
 });
 
-test("Wake this task at…: the owner arms a timed wakeup with a message", async ({
+test("Wake this chat at…: the owner arms a timed wakeup with a message", async ({
   page,
   context,
 }) => {
@@ -456,7 +460,7 @@ test("Wake this task at…: the owner arms a timed wakeup with a message", async
   await context.clearCookies();
   await signIn(context, "bob@example.org");
   await page.goto(`${instance.url}/channels/${TASK}`);
-  await expect(page.getByText("This task doesn't exist, or isn't yours.")).toBeVisible();
+  await expect(page.getByText("This chat doesn't exist, or isn't yours.")).toBeVisible();
   await expect(page.getByTestId("jarvis3-wake-open")).toHaveCount(0);
 });
 
@@ -476,7 +480,7 @@ test("a new post's notice opens the channel; another user can't open it", async 
   await context.clearCookies();
   await signIn(context, "bob@example.org");
   await page.goto(`${instance.url}/channels/${TASK}`);
-  await expect(page.getByText("This task doesn't exist, or isn't yours.")).toBeVisible();
+  await expect(page.getByText("This chat doesn't exist, or isn't yours.")).toBeVisible();
   await expect(page.getByText("Statements downloaded")).toHaveCount(0);
   await page.goto(`${instance.url}/scheduled`);
   await expect(page.getByText("No schedules yet")).toBeVisible();

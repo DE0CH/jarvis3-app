@@ -47,7 +47,7 @@ export function approvalKindLabel(approval: ApprovalView): string {
 
 const APPROVER: Record<ApprovalLevel, string> = {
   auto: "Allowed by policy",
-  self: "The task's owner",
+  self: "The chat's owner",
   admin: "An admin",
   owner: "The instance's owner, with a passkey",
 };

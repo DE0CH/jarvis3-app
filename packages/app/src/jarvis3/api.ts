@@ -11,6 +11,7 @@ import type {
   ChannelPostList,
   CreatePushSubscriptionRequest,
   CreateScheduleRequest,
+  CreateProjectRequest,
   CreateTaskRequest,
   DecideRequest,
   FileLink,
@@ -25,6 +26,8 @@ import type {
   NoticeList,
   PersonalLayerView,
   PersonalNote,
+  ProjectList,
+  ProjectView,
   PushSettings,
   PushSubscriptionView,
   PushTestResult,
@@ -37,6 +40,8 @@ import type {
   ScheduleRunNowResult,
   ScheduleView,
   SearchResult,
+  SendMessageRequest,
+  SendMessageResult,
   SetInstructionsRequest,
   SetLimitsRequest,
   SetPushKindsRequest,
@@ -47,7 +52,9 @@ import type {
   TaskView,
   ToolsAdminView,
   TranscriptPage,
+  UpdateProjectRequest,
   UpdateScheduleRequest,
+  UpdateTaskRequest,
   UserDetail,
   UserList,
   WakeupList,
@@ -253,6 +260,19 @@ export function createJarvis3Api(deps: Jarvis3ApiDeps) {
     pauseTask: (taskId: string) => call<TaskView>("POST", `/api/tasks/${id(taskId)}/pause`),
     resumeTask: (taskId: string) => call<TaskView>("POST", `/api/tasks/${id(taskId)}/resume`),
     deleteTask: (taskId: string) => call<TaskView>("DELETE", `/api/tasks/${id(taskId)}`),
+    renameTask: (taskId: string, request: UpdateTaskRequest) =>
+      call<TaskView>("PATCH", `/api/tasks/${id(taskId)}`, request),
+    sendMessage: (taskId: string, request: SendMessageRequest) =>
+      call<SendMessageResult>("POST", `/api/tasks/${id(taskId)}/messages`, request),
+
+    listProjects: () => call<ProjectList>("GET", "/api/projects"),
+    getProject: (projectId: string) => call<ProjectView>("GET", `/api/projects/${id(projectId)}`),
+    createProject: (request: CreateProjectRequest) =>
+      call<ProjectView>("POST", "/api/projects", request),
+    updateProject: (projectId: string, request: UpdateProjectRequest) =>
+      call<ProjectView>("PATCH", `/api/projects/${id(projectId)}`, request),
+    deleteProject: (projectId: string) =>
+      call<{ ok: true }>("DELETE", `/api/projects/${id(projectId)}`),
 
     getLayer: () => call<PersonalLayerView>("GET", `${me}/layer`),
     setInstructions: (text: string) =>

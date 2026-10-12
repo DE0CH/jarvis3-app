@@ -71,6 +71,8 @@ interface SeedClient {
 export async function startTaskDaemon(options: {
   firstPrompt: string;
   title: string;
+  /** The mock provider's model; the default is a 2 s text-only stream. */
+  model?: string;
 }): Promise<TaskDaemon> {
   const port = await freePort();
   const password = randomBytes(18).toString("hex");
@@ -137,7 +139,7 @@ export async function startTaskDaemon(options: {
       workspaceId: created.workspace.id,
       title: options.title,
       modeId: "load-test",
-      model: "e2e-fast-stream",
+      model: options.model ?? "e2e-fast-stream",
       initialPrompt: options.firstPrompt,
     });
     await client.close();

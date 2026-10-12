@@ -156,7 +156,7 @@ describe("what a tapped push opens", () => {
     expect(pushRoute({ jarvis3: "notice", kind: "channel_post", taskId: "t1" })).toBe(
       "/channels/t1",
     );
-    expect(pushRoute({ jarvis3: "notice", kind: "task_failed", taskId: "t1" })).toBe("/tasks/t1");
+    expect(pushRoute({ jarvis3: "notice", kind: "task_failed", taskId: "t1" })).toBe("/chats/t1");
     expect(pushRoute({ jarvis3: "notice", kind: "machine_hours_cap" })).toBe("/notices");
     expect(pushRoute({ jarvis3: "test" })).toBe("/me/notifications");
   });

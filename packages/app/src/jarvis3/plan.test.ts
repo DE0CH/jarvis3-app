@@ -16,17 +16,15 @@ import {
   isLayerEmpty,
   Jarvis3Error,
   mergeTask,
-  orderTasks,
   pairErrorMessage,
   parseLimitInput,
   toolsCapReached,
   parsePairRedirect,
   noticesLabel,
-  planTaskChat,
-  presentTask,
   resolveInstanceUrl,
   signOutMessage,
   signOutReason,
+  stateLabel,
   taskAgentOnHost,
   taskListNeedsRefresh,
   validateSkill,
@@ -46,6 +44,8 @@ function task(patch: Partial<TaskView> = {}): TaskView {
     updatedAt: "2026-10-08T12:00:00.000Z",
     connected: true,
     agentId: null,
+    lastActivityAt: "2026-10-08T12:00:00.000Z",
+    projects: [],
     ...patch,
   };
 }
@@ -74,37 +74,12 @@ describe("resolveInstanceUrl", () => {
   });
 });
 
-describe("presentTask", () => {
-  it("opens a connected running task and offers Pause", () => {
-    const view = presentTask(task());
-    expect(view).toMatchObject({ canOpen: true, canPause: true, canResume: false, tone: "ok" });
-  });
-  it("does not open a running task whose session is not connected", () => {
-    expect(presentTask(task({ connected: false })).canOpen).toBe(false);
-  });
-  it("offers Start for a paused task and names the reason", () => {
-    const view = presentTask(task({ state: "paused", pausedReason: "idle", connected: false }));
-    expect(view.canResume).toBe(true);
-    expect(view.label).toBe("Paused after being idle");
-  });
-  it("does not offer Start while an operation runs or for an offboarded user", () => {
-    expect(
-      presentTask(
-        task({ state: "paused", busy: { kind: "resuming", since: "x" }, connected: false }),
-      ).canResume,
-    ).toBe(false);
-    expect(
-      presentTask(task({ state: "paused", pausedReason: "offboarded", connected: false }))
-        .canResume,
-    ).toBe(false);
-  });
-  it("shows the last error as detail", () => {
-    expect(presentTask(task({ state: "failed", error: "no machine" })).detail).toBe("no machine");
-  });
-  it("labels a resume in progress", () => {
-    expect(
-      presentTask(task({ state: "starting", busy: { kind: "resuming", since: "x" } })).label,
-    ).toBe("Resuming…");
+describe("stateLabel", () => {
+  it("never names machine states: a chat, deleted, or one that couldn't start", () => {
+    expect(stateLabel("paused")).toBe("Chat");
+    expect(stateLabel("running")).toBe("Chat");
+    expect(stateLabel("archived")).toBe("Deleted");
+    expect(stateLabel("failed")).toBe("Couldn't start");
   });
 });
 
@@ -117,12 +92,6 @@ describe("task list", () => {
       taskListNeedsRefresh([task({ state: "paused", busy: { kind: "resuming", since: "x" } })]),
     ).toBe(true);
     expect(taskListNeedsRefresh([task({ state: "paused", connected: false })])).toBe(false);
-  });
-  it("puts archived tasks last and keeps the server's order otherwise", () => {
-    const a = task({ id: "a", state: "archived" });
-    const b = task({ id: "b" });
-    const c = task({ id: "c", state: "paused" });
-    expect(orderTasks([a, b, c]).map((t) => t.id)).toEqual(["b", "c", "a"]);
   });
   it("merges a task in place, or adds it at the top", () => {
     const list = [task({ id: "a" }), task({ id: "b" })];
@@ -142,52 +111,6 @@ describe("taskAgentOnHost", () => {
     expect(taskAgentOnHost(task({ agentId: null }), ["helper", "main"])).toBeNull();
     expect(taskAgentOnHost(task({ agentId: "main" }), ["helper"])).toBeNull();
     expect(taskAgentOnHost(null, ["main"])).toBeNull();
-  });
-});
-
-describe("planTaskChat", () => {
-  const base = { loadError: null, hostServerId: null, hostOnline: false, agentId: null };
-  it("is loading, then not found for a 404 (someone else's task looks the same)", () => {
-    expect(planTaskChat({ ...base, task: null }).kind).toBe("loading");
-    expect(
-      planTaskChat({
-        ...base,
-        task: null,
-        loadError: new Jarvis3Error("Not found.", 404, "not_found"),
-      }).kind,
-    ).toBe("not_found");
-  });
-  it("walks starting → connect → connecting → waiting for the agent → chat", () => {
-    expect(
-      planTaskChat({ ...base, task: task({ state: "starting", connected: false }) }).kind,
-    ).toBe("starting");
-    expect(planTaskChat({ ...base, task: task() }).kind).toBe("connect");
-    expect(planTaskChat({ ...base, task: task(), hostServerId: "srv" }).kind).toBe("connecting");
-    expect(
-      planTaskChat({ ...base, task: task(), hostServerId: "srv", hostOnline: true }).kind,
-    ).toBe("waiting_agent");
-    expect(
-      planTaskChat({ ...base, task: task(), hostServerId: "srv", hostOnline: true, agentId: "ag" }),
-    ).toEqual({
-      kind: "chat",
-      serverId: "srv",
-      agentId: "ag",
-    });
-  });
-  it("shows paused with Start, and closed states", () => {
-    expect(
-      planTaskChat({
-        ...base,
-        task: task({ state: "paused", pausedReason: "user", connected: false }),
-      }),
-    ).toEqual({
-      kind: "paused",
-      label: "Paused",
-      canResume: true,
-    });
-    expect(
-      planTaskChat({ ...base, task: task({ state: "archived", connected: false }) }).kind,
-    ).toBe("closed");
   });
 });
 
@@ -311,7 +234,7 @@ describe("admin usage summary", () => {
     expect(describeUsage(detail(false))).toBe(
       "Model spend USD 20.00; machine time 10.0 h of 10 h (set for this user) in 2026-10.",
     );
-    expect(describeUsage(detail(true))).toMatch(/Machine-hour cap reached: tasks paused\.$/);
+    expect(describeUsage(detail(true))).toMatch(/Machine-hour cap reached\.$/);
   });
 });
 

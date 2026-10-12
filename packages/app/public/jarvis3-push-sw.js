@@ -14,7 +14,7 @@ function targetFor(data) {
   if (!data.taskId) return "/notices";
   const id = encodeURIComponent(data.taskId);
   if (kind === "channel_post") return `/channels/${id}`;
-  return `/tasks/${id}`;
+  return `/chats/${id}`;
 }
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -42,7 +42,11 @@ self.addEventListener("push", (event) => {
   // windows that are open learn about it (the e2e test and the app's unread count listen)
   shows.push(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
-      for (const c of list) c.postMessage({ jarvis3Push: { title, data: options.data } });
+      for (const c of list) {
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Client.postMessage has no targetOrigin
+        c.postMessage({ jarvis3Push: { title, data: options.data } });
+      }
+      return undefined;
     }),
   );
   event.waitUntil(Promise.all(shows));
@@ -55,6 +59,7 @@ self.addEventListener("notificationclick", (event) => {
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
       const own = list.find((c) => new URL(c.url).origin === self.location.origin);
       if (own) {
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Client.postMessage has no targetOrigin
         own.postMessage({ jarvis3Open: route });
         return own.focus();
       }

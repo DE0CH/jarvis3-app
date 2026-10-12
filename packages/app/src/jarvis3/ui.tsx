@@ -1,6 +1,7 @@
 // Small building blocks for the Jarvis 3 screens, made of Paseo's own components and theme:
-// the page frame with its navigation, a centered question dialog (never alert()/confirm(), never
-// a bottom sheet), an inline banner and a status pill.
+// the page frame (a header with the sidebar's menu button, or a back button on a detail screen),
+// a centered question dialog (never alert()/confirm(), never a bottom sheet), an inline banner and
+// a status pill. The sidebar itself is in sidebar.tsx.
 import { Children, type ReactNode, type Ref, useCallback } from "react";
 import { Modal, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
 import { usePathname, useRouter, type Href } from "expo-router";
@@ -8,45 +9,18 @@ import { StyleSheet } from "react-native-unistyles";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ScrollView } from "@/components/ui/scroll-view";
 import { Button } from "@/components/ui/button";
-import { approvalsLabel } from "./approvals";
-import { noticesLabel, type Tone } from "./plan";
-import { SCHEDULES_LABEL } from "./schedules";
-import { useAccount } from "./hooks";
+import { BackHeader } from "@/components/headers/back-header";
+import { MenuHeader } from "@/components/headers/menu-header";
+import { type Tone } from "./plan";
+import { NEW_CHAT_HREF, routeKind } from "./nav";
 
-interface NavItem {
-  href: string;
-  label: string;
-  testID: string;
-}
-
-const SCHEDULES_HREF = "/scheduled";
-const TASKS_NAV: NavItem = { href: "/tasks", label: "Tasks", testID: "jarvis3-nav-tasks" };
-const LAYER_NAV: NavItem = {
-  href: "/me/layer",
-  label: "My instructions & skills",
-  testID: "jarvis3-nav-layer",
-};
-const SCHEDULES_NAV: NavItem = {
-  href: SCHEDULES_HREF,
-  label: SCHEDULES_LABEL,
-  testID: "jarvis3-nav-schedules",
-};
-const FILES_NAV: NavItem = { href: "/files", label: "Files", testID: "jarvis3-nav-files" };
-const SEARCH_NAV: NavItem = { href: "/search", label: "Search", testID: "jarvis3-nav-search" };
-const ADMIN_NAV: NavItem = { href: "/admin/users", label: "Users", testID: "jarvis3-nav-admin" };
-const NOTICES_HREF = "/notices";
-const APPROVALS_HREF = "/approvals";
-
-function isCurrent(pathname: string, href: string): boolean {
-  if (pathname === href) return true;
-  if (href === "/tasks" && pathname.startsWith("/channels/")) return true;
-  return (
-    (href === "/tasks" ||
-      href === APPROVALS_HREF ||
-      href === SCHEDULES_HREF ||
-      href === "/search") &&
-    pathname.startsWith(`${href}/`)
-  );
+/** Where Back goes when there is no screen to go back to (a detail screen opened by a link). */
+function parentOf(pathname: string): string {
+  const parts = pathname.split("/").filter(Boolean);
+  if (parts[0] === "me" && parts[1] === "notifications") return "/notices";
+  if (parts[0] === "channels" && parts[1]) return `/chats/${parts[1]}`;
+  if (parts.length > 1) return `/${parts[0]}`;
+  return NEW_CHAT_HREF;
 }
 
 export function Jarvis3Frame({
@@ -67,52 +41,21 @@ export function Jarvis3Frame({
 }) {
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
-  const account = useAccount();
-  const notices: NavItem = {
-    href: NOTICES_HREF,
-    label: noticesLabel(account.me?.unreadNotices ?? 0),
-    testID: "jarvis3-nav-notices",
-  };
-  const approvals: NavItem = {
-    href: APPROVALS_HREF,
-    label: approvalsLabel(account.me?.pendingApprovals ?? 0),
-    testID: "jarvis3-nav-approvals",
-  };
-  const features = account.me?.features;
-  // Scheduled tasks, files and search only on a server that has them (features.*).
-  const base = [
-    TASKS_NAV,
-    ...(features?.schedules ? [SCHEDULES_NAV] : []),
-    ...(features?.files ? [FILES_NAV] : []),
-    ...(features?.search ? [SEARCH_NAV] : []),
-    approvals,
-    LAYER_NAV,
-    notices,
-  ];
-  const nav = account.me?.user.isAdmin ? [...base, ADMIN_NAV] : base;
+  const router = useRouter();
+  const back = useCallback(() => {
+    if (router.canGoBack()) router.back();
+    else router.replace(parentOf(pathname) as Href);
+  }, [router, pathname]);
+  const header =
+    routeKind(pathname) === "detail" ? (
+      <BackHeader title={title} rightContent={actions} onBack={back} />
+    ) : (
+      <MenuHeader title={title} rightContent={actions} />
+    );
   const body = <View style={styles.column}>{children}</View>;
   return (
-    <View style={[styles.page, { paddingTop: insets.top }]} testID={testID}>
-      <View style={styles.topBar}>
-        <View style={styles.nav}>
-          {nav.map((item) => {
-            return <NavLink key={item.href} item={item} current={isCurrent(pathname, item.href)} />;
-          })}
-        </View>
-        {account.me ? (
-          <Text style={styles.who} numberOfLines={1}>
-            {account.me.user.name || account.me.user.email}
-          </Text>
-        ) : null}
-      </View>
-      <View style={styles.titleRow}>
-        <View style={styles.titleInner}>
-          <Text style={styles.title} accessibilityRole="header" numberOfLines={2}>
-            {title}
-          </Text>
-          {actions ? <View style={styles.actions}>{actions}</View> : null}
-        </View>
-      </View>
+    <View style={styles.page} testID={testID}>
+      {header}
       {scroll ? (
         <ScrollView
           ref={scrollRef}
@@ -124,21 +67,6 @@ export function Jarvis3Frame({
         <View style={styles.fill}>{body}</View>
       )}
     </View>
-  );
-}
-
-function NavLink({ item, current }: { item: NavItem; current: boolean }) {
-  const router = useRouter();
-  const go = useCallback(() => router.navigate(item.href as Href), [router, item.href]);
-  return (
-    <Pressable
-      accessibilityRole="link"
-      testID={item.testID}
-      onPress={go}
-      style={[styles.navItem, current && styles.navItemCurrent]}
-    >
-      <Text style={[styles.navText, current && styles.navTextCurrent]}>{item.label}</Text>
-    </Pressable>
   );
 }
 
@@ -301,74 +229,11 @@ const styles = StyleSheet.create((theme) => ({
   fill: {
     flex: 1,
   },
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: theme.spacing[3],
-    paddingHorizontal: theme.spacing[4],
-    paddingVertical: theme.spacing[2],
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceSidebar,
-  },
-  nav: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: theme.spacing[1],
-    flexShrink: 1,
-  },
-  navItem: {
-    paddingHorizontal: theme.spacing[3],
-    paddingVertical: theme.spacing[2],
-    borderRadius: theme.borderRadius.md,
-  },
-  navItemCurrent: {
-    backgroundColor: theme.colors.surface3,
-  },
-  navText: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-  },
-  navTextCurrent: {
-    color: theme.colors.foreground,
-    fontWeight: theme.fontWeight.medium,
-  },
-  who: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-    maxWidth: 200,
-    display: { xs: "none", md: "flex" },
-  },
-  titleRow: {
-    paddingHorizontal: theme.spacing[4],
-    paddingTop: theme.spacing[6],
-    paddingBottom: theme.spacing[3],
-    alignItems: "center",
-  },
-  titleInner: {
-    width: "100%",
-    maxWidth: 880,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: theme.spacing[3],
-  },
-  title: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.xl,
-    fontWeight: theme.fontWeight.semibold,
-    flexShrink: 1,
-  },
-  actions: {
-    flexDirection: "row",
-    gap: theme.spacing[2],
-    alignItems: "center",
-  },
   scrollContent: {
     flexGrow: 1,
   },
   column: {
+    paddingTop: theme.spacing[4],
     width: "100%",
     maxWidth: 880 + 2 * theme.spacing[4],
     paddingHorizontal: theme.spacing[4],

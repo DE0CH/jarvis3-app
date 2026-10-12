@@ -309,7 +309,7 @@ describe("labels", () => {
       label: "Read",
     });
     expect(noticeTarget({ kind: "schedule_skipped", taskId: null })?.href).toBe("/scheduled");
-    expect(noticeTarget({ kind: "wakeup", taskId: "t1" })?.href).toBe("/tasks/t1");
+    expect(noticeTarget({ kind: "wakeup", taskId: "t1" })?.href).toBe("/chats/t1");
     expect(noticeTarget({ kind: "approval_needed", taskId: "t1" })?.href).toBe("/approvals");
     expect(noticeTarget({ kind: "approval_needed", taskId: "t1", approvalId: null })?.href).toBe(
       "/approvals",
@@ -320,7 +320,7 @@ describe("labels", () => {
     });
     // a decided approval's notice still opens its task
     expect(noticeTarget({ kind: "approval_decided", taskId: "t1", approvalId: "ap1" })?.href).toBe(
-      "/tasks/t1",
+      "/chats/t1",
     );
     expect(noticeTarget({ kind: "instance_budget", taskId: null })).toBeNull();
   });

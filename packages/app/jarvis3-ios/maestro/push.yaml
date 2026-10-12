@@ -1,4 +1,4 @@
-# Push notifications on the simulator (the app is paired): Notices -> Notification settings ->
+# Push notifications on the simulator (the app is paired): the sidebar's Notices -> Notification settings ->
 # Turn on -> allow notifications. The app asks iOS for an APNs token and registers it with the
 # mock instance, whose log gets the token (simulator-test.sh prints whether one arrived). A
 # simulator on a CI virtual machine may get no token from Apple; the screen then says so.
@@ -6,8 +6,14 @@ appId: ${APP_ID}
 ---
 - extendedWaitUntil:
     visible:
-      id: "jarvis3-nav-notices"
+      id: "menu-button"
     timeout: 60000
+- tapOn:
+    id: "menu-button"
+- extendedWaitUntil:
+    visible:
+      id: "jarvis3-nav-notices"
+    timeout: 20000
 - tapOn:
     id: "jarvis3-nav-notices"
 - extendedWaitUntil:
@@ -20,7 +26,7 @@ appId: ${APP_ID}
     visible:
       id: "jarvis3-push-on"
     timeout: 30000
-- takeScreenshot: 5-push-off
+- takeScreenshot: 8-push-off
 - tapOn:
     id: "jarvis3-push-on"
 - extendedWaitUntil:
@@ -35,4 +41,4 @@ appId: ${APP_ID}
 - extendedWaitUntil:
     visible: ".*(On for this device|couldn.t register|weren.t allowed).*"
     timeout: 60000
-- takeScreenshot: 6-push-result
+- takeScreenshot: 9-push-result

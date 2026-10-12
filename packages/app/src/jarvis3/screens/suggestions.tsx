@@ -110,7 +110,7 @@ export function SuggestButton({
       <CenteredDialog
         visible={asking}
         title="Suggest for everyone?"
-        message={`${label} is sent to an admin as a proposed change to the company's setup. If they accept it, every new task loads it.`}
+        message={`${label} is sent to an admin as a proposed change to the company's setup. If they accept it, every new chat loads it.`}
         confirmLabel="Suggest"
         busy={state.busy}
         onCancel={cancel}

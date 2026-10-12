@@ -1,4 +1,5 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { isJarvis3 } from "@/jarvis3/config";
 import {
   View,
   Text,
@@ -273,7 +274,7 @@ function AttachmentDropdown({
   const isButtonDisabled = !isConnected || disabled;
   if (!visible) return null;
   return (
-    <DropdownMenu compactMode="sheet">
+    <DropdownMenu compactMode={isJarvis3 ? "popover" : "sheet"}>
       <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger

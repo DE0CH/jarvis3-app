@@ -47,7 +47,7 @@ function SchedulesBody({ loaded, schedules }: { loaded: boolean; schedules: Sche
     return (
       <EmptyState
         title="No schedules yet"
-        hint="A schedule runs a prompt as a new task at the times you choose, for example a report every Monday at 09:00. The agent posts the result to the task's channel."
+        hint="A schedule runs a prompt as a new chat at the times you choose, for example a report every Monday at 09:00. Jarvis posts the result to the chat's channel."
       />
     );
   }
@@ -78,7 +78,7 @@ function ScheduleRow({ schedule }: { schedule: ScheduleView }) {
   const runNow = useCallback(() => void schedulesStore.runNow(schedule.id), [schedule.id]);
   const startedTask = lastRunNow?.task ?? null;
   const openTask = useCallback(() => {
-    if (startedTask) router.push(`/tasks/${encodeURIComponent(startedTask.id)}` as Href);
+    if (startedTask) router.push(`/chats/${encodeURIComponent(startedTask.id)}` as Href);
   }, [router, startedTask]);
   return (
     <View style={styles.row} testID={`jarvis3-schedule-${schedule.id}`}>
@@ -130,10 +130,10 @@ function ScheduleRow({ schedule }: { schedule: ScheduleView }) {
       {error ? <Banner tone="error">{error}</Banner> : null}
       {lastRunNow && !error ? (
         <Banner tone={startedTask ? "ok" : "info"} testID={`jarvis3-schedule-ran-${schedule.id}`}>
-          {startedTask ? "Started a new task." : runResultLabel(lastRunNow.run).label}
+          {startedTask ? "Started a new chat." : runResultLabel(lastRunNow.run).label}
           {startedTask ? (
             <Button variant="outline" size="sm" onPress={openTask}>
-              Open task
+              Open chat
             </Button>
           ) : null}
         </Banner>

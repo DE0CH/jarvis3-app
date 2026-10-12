@@ -38,6 +38,8 @@ test.beforeAll(async () => {
     updatedAt: t,
     connected: false,
     agentId: null,
+    lastActivityAt: t,
+    projects: [],
   };
   instance = await startMockInstance({
     distDir: DIST,
@@ -92,10 +94,10 @@ test("staff: the count, the chat notice, the queue, approve and deny their own",
   context,
 }) => {
   await signIn(context, "alice@example.org");
-  await page.goto(`${instance.url}/tasks/${TASK}`);
-  await expect(page.getByTestId("jarvis3-nav-approvals")).toContainText("Approvals (2)");
+  await page.goto(`${instance.url}/chats/${TASK}`);
+  await expect(page.getByTestId("jarvis3-nav-approvals-count")).toHaveText("2");
   const notice = page.getByTestId("jarvis3-chat-approval");
-  await expect(notice).toContainText("2 requests from this task wait for your decision.");
+  await expect(notice).toContainText("Waiting on you: 2 requests from this chat.");
   await shoot(page, "chat-notice", () => expect(notice).toBeVisible());
 
   await page.getByTestId("jarvis3-chat-approval-review").click();
@@ -134,7 +136,7 @@ test("staff: the count, the chat notice, the queue, approve and deny their own",
   await expect(page.getByTestId("jarvis3-approval-outcome")).toContainText(
     "Keep the folder until Friday.",
   );
-  await expect(page.getByTestId("jarvis3-nav-approvals")).toHaveText("Approvals");
+  await expect(page.getByTestId("jarvis3-nav-approvals-count")).toHaveCount(0);
   expect(instance.state.approvals.find((a) => a.id === APPROVAL_IDS.guard)?.decision?.note).toBe(
     "Keep the folder until Friday.",
   );
@@ -154,7 +156,7 @@ test("admin and owner: access grant, a question's answer, a Tier 3 change", asyn
   );
 
   await page.goto(`${instance.url}/approvals`);
-  await expect(page.getByTestId("jarvis3-nav-approvals")).toContainText("Approvals (3)");
+  await expect(page.getByTestId("jarvis3-nav-approvals-count")).toHaveText("3");
   const pending = page.getByTestId("jarvis3-approvals-pending");
   await expect(pending).toContainText("Add the DNS record reports.example.org");
   await expect(page.getByTestId("jarvis3-passkeys")).toBeVisible();
@@ -205,5 +207,5 @@ test("admin and owner: access grant, a question's answer, a Tier 3 change", asyn
   await expect(page).toHaveURL(new RegExp(`/approvals/${APPROVAL_IDS.tier3}$`));
   await expect(page.getByTestId("jarvis3-approval-state")).toContainText(/Running|Done/);
   await expect(page.getByTestId("jarvis3-approval-outcome")).toContainText("with a passkey");
-  await expect(page.getByTestId("jarvis3-nav-approvals")).toHaveText("Approvals");
+  await expect(page.getByTestId("jarvis3-nav-approvals-count")).toHaveCount(0);
 });

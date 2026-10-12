@@ -2,8 +2,10 @@ import { useSyncExternalStore } from "react";
 import {
   accountStore,
   approvalsStore,
+  chatMessagesStore,
   layerStore,
   noticesStore,
+  projectsStore,
   pushStore,
   schedulesStore,
   taskExtrasStore,
@@ -24,5 +26,7 @@ export const useApprovals = () => useStore(approvalsStore);
 export const useSchedules = () => useStore(schedulesStore);
 export const useTaskExtras = () => useStore(taskExtrasStore);
 export const usePush = () => useStore(pushStore);
+export const useChatMessages = () => useStore(chatMessagesStore);
+export const useProjects = () => useStore(projectsStore);
 export const useDevice = () =>
   useSyncExternalStore(subscribeDevice, getDeviceSnapshot, getDeviceSnapshot);

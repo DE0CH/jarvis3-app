@@ -125,7 +125,7 @@ export function FilesScreen({ dir, userId }: { dir: string; userId: string | nul
       <Breadcrumbs dir={dir} onGo={go} />
       {state.list ? (
         <Text style={styles.hint} testID="jarvis3-files-usage">
-          {`${usageLine(state.list)} · up to ${formatBytes(state.list.maxFileBytes)} per file. New tasks find these files in ~/files.`}
+          {`${usageLine(state.list)} · up to ${formatBytes(state.list.maxFileBytes)} per file. New chats find these files in ~/files.`}
         </Text>
       ) : null}
       {state.error ? (
@@ -157,7 +157,7 @@ export function FilesScreen({ dir, userId }: { dir: string; userId: string | nul
       <CenteredDialog
         visible={deleting !== null}
         title="Delete this file?"
-        message={`"${deleting?.path ?? ""}" is deleted. Tasks that are running keep their own copy.`}
+        message={`"${deleting?.path ?? ""}" is deleted. Chats that already have it keep their own copy.`}
         confirmLabel="Delete"
         destructive
         onCancel={cancelDelete}
@@ -274,7 +274,7 @@ function FolderBody({
     return (
       <EmptyState
         title="No files yet"
-        hint="Upload documents your tasks should work with. Files a task saves for you appear here too."
+        hint="Upload documents your chats should work with. Files a chat saves for you appear here too."
       />
     );
   }

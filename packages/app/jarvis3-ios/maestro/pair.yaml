@@ -1,5 +1,6 @@
-# Fresh install against the mock instance: pair through the system sign-in sheet, then the task
-# list loads with the device token (CF-Access-Client-Id/Secret).
+# Fresh install against the mock instance: pair through the system sign-in sheet; the app then
+# opens on an empty chat with the composer focused, loaded with the device token
+# (CF-Access-Client-Id/Secret); a first message creates the chat, which shows in the sidebar.
 appId: ${APP_ID}
 ---
 - launchApp:
@@ -41,7 +42,35 @@ appId: ${APP_ID}
 # shuts down fails Maestro's XCTest driver ("SafariViewService is not running") and the run dies.
 - waitForAnimationToEnd:
     timeout: 10000
+# the first screen: an empty chat, the composer ready to type into
 - extendedWaitUntil:
-    visible: "Draft the Q3 supplier summary"
+    visible: "What can I help with?"
     timeout: 60000
-- takeScreenshot: 3-tasks
+- assertVisible:
+    id: "jarvis3-composer-input"
+- takeScreenshot: 3-new-chat
+- tapOn:
+    id: "jarvis3-composer-input"
+- inputText: "Summarise the onboarding handbook"
+- takeScreenshot: 4-typed
+- tapOn:
+    id: "jarvis3-composer-send"
+# the chat opens with the message and a quiet "Starting…" while the agent wakes
+- extendedWaitUntil:
+    visible:
+      id: "jarvis3-chat-starting"
+    timeout: 60000
+- assertVisible: "Summarise the onboarding handbook"
+- takeScreenshot: 5-chat-starting
+# the sidebar (the drawer from the menu button) lists it with the user's other chats
+- tapOn:
+    id: "menu-button"
+- extendedWaitUntil:
+    visible:
+      id: "jarvis3-sidebar"
+    timeout: 20000
+- assertVisible: "Draft the Q3 supplier summary"
+- assertVisible: "Summarise the onboarding handbook"
+- takeScreenshot: 6-sidebar
+- tapOn:
+    id: "jarvis3-sidebar-close"

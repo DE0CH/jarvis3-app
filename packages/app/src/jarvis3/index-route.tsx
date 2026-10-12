@@ -1,11 +1,23 @@
-// In the jarvis3 variant the app opens on the task list instead of Paseo's host/workspace start
-// (used by app/index.tsx and app/welcome.tsx). Null in every other variant.
+// In the jarvis3 variant the app opens on a new chat (`/`) instead of Paseo's host/workspace start,
+// and Paseo's pairing welcome goes there too (used by app/index.tsx and app/welcome.tsx). Null in
+// every other variant.
 import type { ReactElement } from "react";
 import { Redirect, type Href } from "expo-router";
 import { isJarvis3 } from "./config";
+import { Jarvis3Gate } from "./gate";
+import { NewChatScreen } from "./screens/new-chat-screen";
 
-function RedirectToTasks() {
-  return <Redirect href={"/tasks" as Href} />;
+function NewChatRoute() {
+  return (
+    <Jarvis3Gate>
+      <NewChatScreen />
+    </Jarvis3Gate>
+  );
 }
 
-export const Jarvis3Index: (() => ReactElement) | null = isJarvis3 ? RedirectToTasks : null;
+function RedirectToNewChat() {
+  return <Redirect href={"/" as Href} />;
+}
+
+export const Jarvis3Index: (() => ReactElement) | null = isJarvis3 ? NewChatRoute : null;
+export const Jarvis3Welcome: (() => ReactElement) | null = isJarvis3 ? RedirectToNewChat : null;

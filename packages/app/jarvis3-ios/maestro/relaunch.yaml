@@ -1,11 +1,19 @@
-# The device token survives a relaunch (Keychain): the task list loads without signing in.
+# The device token survives a relaunch (Keychain): the app opens on a new chat without signing in,
+# and the sidebar still lists the chats.
 appId: ${APP_ID}
 ---
 - stopApp
 - launchApp
 - extendedWaitUntil:
-    visible: "Draft the Q3 supplier summary"
+    visible: "What can I help with?"
     timeout: 60000
 - assertNotVisible:
     id: "jarvis3-sign-in"
-- takeScreenshot: 4-relaunched
+- tapOn:
+    id: "menu-button"
+- extendedWaitUntil:
+    visible: "Draft the Q3 supplier summary"
+    timeout: 30000
+- takeScreenshot: 7-relaunched
+- tapOn:
+    id: "jarvis3-sidebar-close"

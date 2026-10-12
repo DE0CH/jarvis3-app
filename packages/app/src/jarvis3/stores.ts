@@ -50,15 +50,17 @@ export interface Timers {
 }
 
 export const REFRESH_WHILE_CHANGING_MS = 3_000;
+/** While the chat list is shown and nothing changes: new chats (a schedule's run), activity order. */
+export const REFRESH_IDLE_MS = 30_000;
 
-// ---- tasks --------------------------------------------------------------------------------
+// ---- tasks (the app's chats) ------------------------------------------------------------------
 
 export interface TasksState {
   loaded: boolean;
   refreshing: boolean;
   tasks: TaskView[];
-  /** Tasks with an action in flight (Resume, Pause, Delete) from this app. */
-  pending: Record<string, "resume" | "pause" | "delete">;
+  /** Chats with a rename or delete in flight from this app. */
+  pending: Record<string, "rename" | "delete">;
   error: string | null;
   signedOut: boolean;
 }
@@ -74,18 +76,21 @@ export function createTasksStore(api: Jarvis3Api, timers: Timers) {
   });
   let timer: unknown = null;
   let tail: Promise<void> = Promise.resolve();
-  let active = false;
+  let active = 0;
 
   function schedule(): void {
     if (timer !== null) timers.clearTimeout(timer);
     timer = null;
-    if (!active) return;
+    if (active === 0) return;
     const { tasks, pending } = state.get();
-    if (!taskListNeedsRefresh(tasks) && Object.keys(pending).length === 0) return;
-    timer = timers.setTimeout(() => {
-      timer = null;
-      void refresh();
-    }, REFRESH_WHILE_CHANGING_MS);
+    const changing = taskListNeedsRefresh(tasks) || Object.keys(pending).length > 0;
+    timer = timers.setTimeout(
+      () => {
+        timer = null;
+        void refresh();
+      },
+      changing ? REFRESH_WHILE_CHANGING_MS : REFRESH_IDLE_MS,
+    );
   }
 
   function fail(error: unknown): void {
@@ -110,18 +115,21 @@ export function createTasksStore(api: Jarvis3Api, timers: Timers) {
     schedule();
   }
 
+  /** Runs a change; returns the error's message (also kept in `error`), or null. */
   async function act(
     taskId: string,
-    kind: "resume" | "pause" | "delete",
+    kind: "rename" | "delete",
     call: () => Promise<TaskView>,
-  ) {
-    if (state.get().pending[taskId]) return;
+  ): Promise<string | null> {
+    if (state.get().pending[taskId]) return null;
     state.set({ pending: { ...state.get().pending, [taskId]: kind }, error: null });
     try {
       const task = await call();
       state.set({ tasks: mergeTask(state.get().tasks, task) });
+      return null;
     } catch (error) {
       fail(error);
+      return messageOf(error);
     } finally {
       const { [taskId]: _done, ...rest } = state.get().pending;
       state.set({ pending: rest });
@@ -133,20 +141,22 @@ export function createTasksStore(api: Jarvis3Api, timers: Timers) {
     get: state.get,
     subscribe: state.subscribe,
     refresh,
-    /** The list screen is visible: refresh now, and keep refreshing while tasks change state. */
+    /** A chat list is visible: refresh now and keep it fresh. Each activate needs a deactivate. */
     activate() {
-      active = true;
+      active += 1;
       void refresh();
     },
     deactivate() {
-      active = false;
+      active = Math.max(0, active - 1);
+      if (active > 0) return;
       if (timer !== null) timers.clearTimeout(timer);
       timer = null;
     },
-    resume: (taskId: string) => act(taskId, "resume", () => api.resumeTask(taskId)),
-    pause: (taskId: string) => act(taskId, "pause", () => api.pauseTask(taskId)),
+    rename: (taskId: string, title: string) =>
+      act(taskId, "rename", () => api.renameTask(taskId, { title })),
+    /** Delete = the server's destroy (the chat is archived there, gone from the app). */
     remove: (taskId: string) => act(taskId, "delete", () => api.deleteTask(taskId)),
-    /** Creates a task; returns it, or throws a Jarvis3Error to show on the form. */
+    /** Creates a chat; returns it, or throws a Jarvis3Error to show at the composer. */
     async create(request: CreateTaskRequest): Promise<TaskView> {
       const task = await api.createTask(request);
       state.set({ tasks: mergeTask(state.get().tasks, task) });
@@ -269,11 +279,11 @@ export interface LayerState {
   error: string | null;
   /** Shown after Reset: the archived version, with Undo. null when nothing was archived. */
   lastReset: { version: number | null } | null;
-  /** A one-line confirmation after a change ("Saved. Applies from your next task."). */
+  /** A one-line confirmation after a change ("Saved. Applies from your next chat."). */
   notice: string | null;
 }
 
-export const APPLIES_NEXT_TASK = "Saved. Applies from your next task.";
+export const APPLIES_NEXT_TASK = "Saved. Applies from your next chat.";
 
 export function createLayerStore(api: Jarvis3Api) {
   const state = createState<LayerState>({

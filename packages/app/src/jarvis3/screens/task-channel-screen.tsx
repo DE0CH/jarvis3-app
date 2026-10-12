@@ -2,7 +2,7 @@
 // a scheduled run), newest first, and the wakeups it armed, with Cancel. Opening it marks the posts
 // read for the task's owner. An admin opening someone else's channel (from the Users page) gets it
 // read-only: no Cancel, no Open chat, no Wake, and nothing is marked read. The owner can also
-// wake the task at a time ("Wake this task at…", POST /api/tasks/:id/wakeups).
+// wake the task at a time ("Wake this chat at…", POST /api/tasks/:id/wakeups).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { useRouter, type Href } from "expo-router";
@@ -60,7 +60,7 @@ export function TaskChannelScreen({ taskId }: { taskId: string }) {
   }, [taskId, myId]);
 
   const openChat = useCallback(
-    () => router.push(`/tasks/${encodeURIComponent(taskId)}` as Href),
+    () => router.push(`/chats/${encodeURIComponent(taskId)}` as Href),
     [router, taskId],
   );
   const canOpenChat =
@@ -82,7 +82,7 @@ export function TaskChannelScreen({ taskId }: { taskId: string }) {
   if (taskError && !posts?.posts.length) {
     return (
       <Jarvis3Frame title="Channel" testID="jarvis3-channel">
-        <EmptyState title="This task doesn't exist, or isn't yours." hint={taskError} />
+        <EmptyState title="This chat doesn't exist, or isn't yours." hint={taskError} />
       </Jarvis3Frame>
     );
   }
@@ -95,7 +95,7 @@ export function TaskChannelScreen({ taskId }: { taskId: string }) {
     >
       {readOnly ? (
         <Banner tone="info" testID="jarvis3-channel-read-only">
-          {"Read only: this is another person's task. Opening it doesn't mark their posts read."}
+          {"Read only: this is another person's chat. Opening it doesn't mark their posts read."}
         </Banner>
       ) : null}
       <WakeupsSection
@@ -141,7 +141,7 @@ function CancelWakeupDialog({
     <CenteredDialog
       visible={wakeup !== null}
       title="Cancel this wakeup?"
-      message={`The task won't be woken for "${wakeup?.name ?? ""}". The agent can arm it again.`}
+      message={`The chat won't be woken for "${wakeup?.name ?? ""}". The agent can arm it again.`}
       confirmLabel="Cancel wakeup"
       cancelLabel="Keep"
       destructive
@@ -195,8 +195,8 @@ function WakeDialog({
   return (
     <CenteredDialog
       visible={visible}
-      title="Wake this task at…"
-      message={`The task gets your message then, and starts again if it is paused. Your time${zone ? ` (${zone})` : ""}.`}
+      title="Wake this chat at…"
+      message={`The chat gets your message then. Your time${zone ? ` (${zone})` : ""}.`}
       confirmLabel="Wake then"
       busy={busy}
       onCancel={onClose}
@@ -308,7 +308,7 @@ function WakeupsSection({
     () =>
       onWake ? (
         <Button variant="outline" size="sm" onPress={onWake} testID="jarvis3-wake-open">
-          Wake this task at…
+          Wake this chat at…
         </Button>
       ) : null,
     [onWake],
@@ -322,7 +322,7 @@ function WakeupsSection({
         <SettingsCard>
           <SettingsRow
             label="No wakeups"
-            hint="The agent can ask to be woken later (at a time, on a repeat, or when a page changes), and you can wake it at a time. The task starts again by itself if it was paused."
+            hint="The agent can ask to be woken later (at a time, on a repeat, or when a page changes), and you can wake it at a time."
           />
         </SettingsCard>
       ) : (

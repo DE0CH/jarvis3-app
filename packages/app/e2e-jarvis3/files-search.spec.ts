@@ -33,6 +33,8 @@ function task(patch: Partial<TaskView> & Pick<TaskView, "id" | "userId" | "title
     updatedAt: t,
     connected: false,
     agentId: AGENT,
+    lastActivityAt: t,
+    projects: [],
     ...patch,
   };
 }
@@ -124,13 +126,13 @@ async function uploadThroughPicker(page: Page, button: string, name: string, tex
 
 test("files: browse, upload, download, rename into a folder, delete", async ({ page, context }) => {
   await signIn(context, "alice@example.org");
-  await page.goto(`${instance.url}/tasks`);
+  await page.goto(`${instance.url}/`);
   await visible(page, "jarvis3-nav-files").click();
   await expect(page).toHaveURL(/\/files$/);
   const list = () => visible(page, "jarvis3-files-list");
   await expect(list()).toContainText("reports/");
   await expect(list()).toContainText("summary.md");
-  await expect(list()).toContainText("Saved by a task");
+  await expect(list()).toContainText("Saved by a chat");
   await expect(visible(page, "jarvis3-files-usage")).toContainText("used");
   await shoot(page, "files", () => expect(list()).toContainText("summary.md"));
 
@@ -183,27 +185,38 @@ test("files: browse, upload, download, rename into a folder, delete", async ({ p
   expect(instance.state.files.get("u-alice")?.has("archive/2026/notes.txt")).toBe(false);
 });
 
-test("New task: an attached file is uploaded and its path goes with the first prompt", async ({
+/** The composer's attach button, then "Upload files", then the browser's file chooser. */
+async function uploadThroughComposer(page: Page, name: string, text: string) {
+  await visible(page, "jarvis3-composer-attach").click();
+  const chooser = page.waitForEvent("filechooser");
+  await visible(page, "jarvis3-composer-upload").click();
+  await (await chooser).setFiles({ name, mimeType: "text/plain", buffer: Buffer.from(text) });
+}
+
+async function send(page: Page, text: string) {
+  const input = visible(page, "jarvis3-composer-input");
+  await input.fill(text);
+  await expect(visible(page, "jarvis3-composer-send")).toBeEnabled();
+  await input.press("Enter");
+}
+
+test("new chat: an attached file is uploaded and its path goes with the first message", async ({
   page,
   context,
 }) => {
   await signIn(context, "alice@example.org");
-  await page.goto(`${instance.url}/tasks/new`);
-  await expect(page.getByTestId("jarvis3-new-task-screen")).toBeVisible();
-  await uploadThroughPicker(page, "jarvis3-new-task-attach", "brief.txt", "the brief");
-  await expect(visible(page, "jarvis3-new-task-attachments")).toContainText("brief.txt");
-  await shoot(page, "new-task-attachments", async () => {
-    await expect(page.getByTestId("jarvis3-new-task-screen")).toBeVisible();
-  });
-  // shoot() reloads: pick the file again and fill the prompt
-  await uploadThroughPicker(page, "jarvis3-new-task-attach", "brief.txt", "the brief");
+  await page.goto(`${instance.url}/`);
+  await expect(page.getByTestId("jarvis3-new-chat-screen")).toBeVisible();
+  await uploadThroughComposer(page, "brief.txt", "the brief");
   await expect(visible(page, "jarvis3-attachment-0")).toContainText("brief.txt");
-  await expect(async () => {
-    await visible(page, "jarvis3-new-task-prompt").fill("Turn the attached brief into a plan");
-    await expect(visible(page, "jarvis3-new-task-submit")).toBeEnabled({ timeout: 2_000 });
-  }).toPass();
-  await visible(page, "jarvis3-new-task-submit").click();
-  await expect(page).toHaveURL(/\/tasks\/new0+1$/);
+  await shoot(page, "new-chat-attachments", async () => {
+    await expect(page.getByTestId("jarvis3-new-chat-screen")).toBeVisible();
+  });
+  // shoot() reloads: pick the file again
+  await uploadThroughComposer(page, "brief.txt", "the brief");
+  await expect(visible(page, "jarvis3-attachment-0")).toContainText("brief.txt");
+  await send(page, "Turn the attached brief into a plan");
+  await expect(page).toHaveURL(/\/chats\/new0+1$/);
   const request = instance.state.createRequests.at(-1);
   expect(request?.attachments).toHaveLength(1);
   const attached = request?.attachments?.[0] ?? "";
@@ -212,18 +225,18 @@ test("New task: an attached file is uploaded and its path goes with the first pr
   expect(request?.requestId && attached.includes(request.requestId)).toBe(true);
 });
 
-test("New task: files already in Files are attached by path, with a fresh upload", async ({
+test("new chat: files already in Files are attached by path, with a fresh upload", async ({
   page,
   context,
 }) => {
   await signIn(context, "alice@example.org");
   const openChooser = async () => {
-    await expect(page.getByTestId("jarvis3-new-task-screen")).toBeVisible();
-    await visible(page, "jarvis3-new-task-from-files").click();
+    await expect(page.getByTestId("jarvis3-new-chat-screen")).toBeVisible();
+    await visible(page, "jarvis3-composer-attach").click();
+    await visible(page, "jarvis3-composer-from-files").click();
     await expect(visible(page, "jarvis3-from-files-dialog")).toBeVisible();
     await expect(visible(page, "jarvis3-from-files-reports/q3.txt")).toBeVisible();
   };
-  // screenshots of the chooser: phone and desktop, light and dark
   for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     for (const [label, width, height] of [
@@ -231,42 +244,40 @@ test("New task: files already in Files are attached by path, with a fresh upload
       ["desktop", 1440, 900],
     ] as const) {
       await page.setViewportSize({ width, height });
-      await page.goto(`${instance.url}/tasks/new`);
+      await page.goto(`${instance.url}/`);
       await openChooser();
       await visible(page, "jarvis3-from-files-summary.md").click();
       await page.waitForTimeout(300);
-      await page.screenshot({ path: path.join(SHOTS, `new-task-from-files-${label}-${scheme}.png`) });
+      await page.screenshot({
+        path: path.join(SHOTS, `new-chat-from-files-${label}-${scheme}.png`),
+      });
     }
   }
   await page.emulateMedia({ colorScheme: "light" });
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto(`${instance.url}/tasks/new`);
+  await page.goto(`${instance.url}/`);
   await openChooser();
   const dialog = visible(page, "jarvis3-from-files-dialog");
-  // newest first; the filter narrows on any part of the path
   await expect(dialog).toContainText("summary.md");
-  await page.getByRole("textbox", { name: "Filter your files" }).filter({ visible: true }).fill("REPORTS");
+  await page
+    .getByRole("textbox", { name: "Filter your files" })
+    .filter({ visible: true })
+    .fill("REPORTS");
   await expect(visible(page, "jarvis3-from-files-summary.md")).toHaveCount(0);
   await visible(page, "jarvis3-from-files-reports/q3.txt").click();
   await expect(visible(page, "jarvis3-from-files-dialog-confirm")).toHaveText("Attach 1 file");
   await visible(page, "jarvis3-from-files-dialog-confirm").click();
   await expect(visible(page, "jarvis3-from-files-dialog")).toHaveCount(0);
-  await expect(visible(page, "jarvis3-chosen-reports/q3.txt")).toContainText("In your Files");
-  // a new file next to it, uploaded on submit
-  await uploadThroughPicker(page, "jarvis3-new-task-attach", "fresh.txt", "fresh notes");
+  await expect(visible(page, "jarvis3-chosen-reports/q3.txt")).toContainText("From Files");
+  await uploadThroughComposer(page, "fresh.txt", "fresh notes");
   await expect(visible(page, "jarvis3-attachment-0")).toContainText("fresh.txt");
   const uploadsBefore = instance.state.requests.filter((r) => r.startsWith("PUT ")).length;
-  await expect(async () => {
-    await visible(page, "jarvis3-new-task-prompt").fill("Compare the fresh notes with Q3");
-    await expect(visible(page, "jarvis3-new-task-submit")).toBeEnabled({ timeout: 2_000 });
-  }).toPass();
-  await visible(page, "jarvis3-new-task-submit").click();
-  await expect(page).toHaveURL(/\/tasks\/new0+2$/);
+  await send(page, "Compare the fresh notes with Q3");
+  await expect(page).toHaveURL(/\/chats\/new0+2$/);
   const request = instance.state.createRequests.at(-1);
   expect(request?.attachments).toHaveLength(2);
   expect(request?.attachments?.[0]).toMatch(/^attachments\/[A-Za-z0-9_-]+\/fresh\.txt$/);
   expect(request?.attachments?.[1]).toBe("reports/q3.txt");
-  // only the new file went up: the chosen one is attached by path
   const puts = instance.state.requests.filter((r) => r.startsWith("PUT ")).slice(uploadsBefore);
   expect(puts).toHaveLength(1);
   expect(puts[0]).toContain("fresh.txt");
@@ -277,10 +288,10 @@ test("search: finds a message in an archived task and opens the transcript aroun
   context,
 }) => {
   await signIn(context, "alice@example.org");
-  await page.goto(`${instance.url}/tasks`);
+  await page.goto(`${instance.url}/`);
   await visible(page, "jarvis3-nav-search").click();
   await expect(page).toHaveURL(/\/search$/);
-  const box = page.getByRole("textbox", { name: "Search your tasks" }).filter({ visible: true });
+  const box = page.getByRole("textbox", { name: "Search your chats" }).filter({ visible: true });
   await box.fill("duplicate invoice");
   await visible(page, "jarvis3-search-submit").click();
   const group = visible(page, `jarvis3-search-group-${ARCHIVED}`);
@@ -290,7 +301,7 @@ test("search: finds a message in an archived task and opens the transcript aroun
   await expect(visible(page, "jarvis3-search-everyone")).toHaveCount(0);
   await shoot(page, "search", async () => {
     await page
-      .getByRole("textbox", { name: "Search your tasks" })
+      .getByRole("textbox", { name: "Search your chats" })
       .filter({ visible: true })
       .fill("duplicate invoice");
     await visible(page, "jarvis3-search-submit").click();
@@ -350,7 +361,7 @@ test("another user sees none of alice's files or hits; an admin can search every
   await expect(visible(page, "jarvis3-files-list")).toContainText("bob-only.txt");
   await expect(visible(page, "jarvis3-files-list")).not.toContainText("summary.md");
   await page.goto(`${instance.url}/search`);
-  const box = page.getByRole("textbox", { name: "Search your tasks" }).filter({ visible: true });
+  const box = page.getByRole("textbox", { name: "Search your chats" }).filter({ visible: true });
   await box.fill("duplicate invoice");
   // Enter in the box searches, like the button
   await box.press("Enter");
@@ -362,7 +373,7 @@ test("another user sees none of alice's files or hits; an admin can search every
   await signIn(context, "admin@example.org");
   await page.goto(`${instance.url}/search`);
   await page
-    .getByRole("textbox", { name: "Search your tasks" })
+    .getByRole("textbox", { name: "Search your chats" })
     .filter({ visible: true })
     .fill("duplicate invoice");
   await visible(page, "jarvis3-search-everyone").click();

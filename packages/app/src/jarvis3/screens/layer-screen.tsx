@@ -34,13 +34,13 @@ function dialogText(pending: Pending | null): { title: string; message: string; 
     return {
       title: "Reset to company default?",
       message:
-        "Your instructions, skills and notes are archived and your next task starts with the company's setup only. You can undo this.",
+        "Your instructions, skills and notes are archived and your next chat starts with the company's setup only. You can undo this.",
       confirm: "Reset",
     };
   }
   return {
     title: pending?.kind === "skill" ? `Delete the skill "${pending.name}"?` : "Delete this note?",
-    message: "It won't be loaded into your next task.",
+    message: "It won't be loaded into your next chat.",
     confirm: "Delete",
   };
 }
@@ -94,7 +94,8 @@ export function LayerScreen() {
     <Jarvis3Frame title={TITLE} testID="jarvis3-layer">
       <Text style={styles.intro}>
         What you add here is loaded into every task you start, after the company&apos;s own
-        instructions. Changes apply from your next task; running tasks keep what they started with.
+        instructions. Changes apply from your next chat; chats already started keep what they began
+        with.
       </Text>
       <LayerNotices state={layerState} layer={layer} />
       {suggestState ? <SuggestionBanners state={suggestState} /> : null}

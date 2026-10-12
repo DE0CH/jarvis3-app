@@ -1,6 +1,6 @@
 # API changes the jarvis3 app variant asked of the Jarvis 3 server
 
-All requests so far are done (DE0CH/jarvis3, 2026-10-10; contract in its `docs/API.md` and
+All requests so far are done (DE0CH/jarvis3, 2026-10-10 and 2026-10-12; contract in its `docs/API.md` and
 `server/src/api-types.ts`, vendored here as `packages/app/src/jarvis3/api-types.ts`). Put new
 requests below, in priority order; whoever works on the server takes them from here.
 
@@ -15,6 +15,11 @@ requests below, in priority order; whoever works on the server takes them from h
    403 `forbidden` once the account itself has no access. The sign-in screen says which.
 4. **Unread notices**: `unreadNotices` in `GET /api/me`, `read` on each notice and
    `POST /api/notices/read`. The navigation shows the count; the Notices screen marks them read.
+
+5. **For the chat app (2026-10-12)**: `TaskView.lastActivityAt` (sidebar order, unmoved by
+   pausing), `PATCH /api/tasks/:id` (rename; the session's reported title no longer overwrites it),
+   `POST /api/tasks/:id/messages` (a message to a chat that isn't connected; wakes a sleeping one),
+   and Projects (`/api/projects`, `CreateTaskRequest.projects`, `TaskView.projects`).
 
 ## Open
 

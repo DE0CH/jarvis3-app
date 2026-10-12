@@ -122,7 +122,7 @@ export function TranscriptScreen({
   const older = useCallback(() => more("older"), [more]);
   const newer = useCallback(() => more("newer"), [more]);
   const openChat = useCallback(
-    () => router.push(`/tasks/${encodeURIComponent(taskId)}` as Href),
+    () => router.push(`/chats/${encodeURIComponent(taskId)}` as Href),
     [router, taskId],
   );
 
@@ -155,7 +155,7 @@ export function TranscriptScreen({
       {page && page.entries.length === 0 ? (
         <EmptyState
           title="Nothing indexed yet"
-          hint="This task's conversation hasn't been indexed."
+          hint="This chat's conversation hasn't been indexed."
         />
       ) : null}
       {page?.hasOlder ? (

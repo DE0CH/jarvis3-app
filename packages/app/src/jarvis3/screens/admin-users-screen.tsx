@@ -25,7 +25,7 @@ import {
   describeToolsUsage,
   describeUsage,
   parseLimitInput,
-  presentTask,
+  stateLabel,
   toolsCapReached,
 } from "../plan";
 import { messageOf } from "../stores";
@@ -172,7 +172,7 @@ function UserRow({
           />
         ) : null}
         <Button variant="ghost" size="sm" onPress={toggle}>
-          Tasks & layer
+          Chats & layer
         </Button>
         <Button variant="ghost" size="sm" onPress={edit}>
           Limits
@@ -249,8 +249,8 @@ function UserRecords({ userId }: { userId: string }) {
       ) : null}
       {tasks ? (
         <>
-          <Text style={styles.subhead}>Tasks</Text>
-          {tasks.length === 0 ? <Text style={styles.hint}>No tasks.</Text> : null}
+          <Text style={styles.subhead}>Chats</Text>
+          {tasks.length === 0 ? <Text style={styles.hint}>No chats.</Text> : null}
           {tasks.map((task) => (
             <TaskRecord key={task.id} task={task} onDownload={download} />
           ))}
@@ -330,7 +330,7 @@ function TaskRecord({
   task: TaskView;
   onDownload: (taskId: string) => void;
 }) {
-  const view = presentTask(task);
+  const label = stateLabel(task.state);
   const press = useCallback(() => onDownload(task.id), [onDownload, task.id]);
   return (
     <View style={styles.taskRow}>
@@ -338,7 +338,7 @@ function TaskRecord({
         <Text style={styles.body} numberOfLines={1}>
           {task.title}
         </Text>
-        <Text style={styles.hint}>{task.error ? `${view.label} · ${task.error}` : view.label}</Text>
+        <Text style={styles.hint}>{task.error ? `${label} · ${task.error}` : label}</Text>
       </View>
       {canDownloadArchive(task) ? (
         <Button variant="ghost" size="sm" onPress={press}>

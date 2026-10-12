@@ -8,6 +8,7 @@ import {
   createLayerStore,
   createNoticesStore,
   createTasksStore,
+  REFRESH_IDLE_MS,
   REFRESH_ME_MS,
   REFRESH_WHILE_CHANGING_MS,
   type Timers,
@@ -27,6 +28,8 @@ function task(patch: Partial<TaskView> = {}): TaskView {
     updatedAt: "2026-10-08T12:00:00.000Z",
     connected: true,
     agentId: null,
+    lastActivityAt: "2026-10-08T12:00:00.000Z",
+    projects: [],
     ...patch,
   };
 }
@@ -172,7 +175,7 @@ function fakeApi(overrides: Partial<Jarvis3Api>): Jarvis3Api {
 }
 
 describe("tasks store", () => {
-  it("loads the list and keeps refreshing only while something changes", async () => {
+  it("refreshes fast while something changes and slowly otherwise", async () => {
     let tasks = [task({ state: "starting", connected: false })];
     const { timers, pending } = fakeTimers();
     const store = createTasksStore(fakeApi({ listTasks: async () => ({ tasks }) }), timers);
@@ -185,48 +188,53 @@ describe("tasks store", () => {
     pending.shift()?.fn();
     await store.refresh();
     expect(store.get().tasks[0]?.state).toBe("running");
-    expect(pending).toHaveLength(0);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.ms).toBe(REFRESH_IDLE_MS);
     store.deactivate();
   });
 
-  it("resumes a paused task, marks it pending meanwhile, and merges the answer", async () => {
+  it("keeps refreshing until the last viewer leaves", async () => {
+    const { timers, pending } = fakeTimers();
+    const store = createTasksStore(fakeApi({ listTasks: async () => ({ tasks: [] }) }), timers);
+    store.activate();
+    store.activate();
+    await store.refresh();
+    store.deactivate();
+    expect(pending.length).toBeGreaterThan(0);
+  });
+
+  it("renames a chat, marks it pending meanwhile, and merges the answer", async () => {
     let release: (value: TaskView) => void = () => undefined;
-    const resumeTask = vi.fn(() => new Promise<TaskView>((resolve) => (release = resolve)));
+    const renameTask = vi.fn(() => new Promise<TaskView>((resolve) => (release = resolve)));
     const store = createTasksStore(
-      fakeApi({
-        listTasks: async () => ({ tasks: [task({ state: "paused", connected: false })] }),
-        resumeTask,
-      }),
+      fakeApi({ listTasks: async () => ({ tasks: [task()] }), renameTask }),
       fakeTimers().timers,
     );
     await store.refresh();
-    const done = store.resume("t1");
-    expect(store.get().pending).toEqual({ t1: "resume" });
-    void store.resume("t1");
-    expect(resumeTask).toHaveBeenCalledTimes(1);
-    release(task({ state: "starting", busy: { kind: "resuming", since: "x" }, connected: false }));
-    await done;
+    const done = store.rename("t1", "Weekly report");
+    expect(store.get().pending).toEqual({ t1: "rename" });
+    void store.rename("t1", "Again");
+    expect(renameTask).toHaveBeenCalledTimes(1);
+    expect(renameTask).toHaveBeenCalledWith("t1", { title: "Weekly report" });
+    release(task({ title: "Weekly report", titleSetByUser: true }));
+    expect(await done).toBeNull();
     expect(store.get().pending).toEqual({});
-    expect(store.get().tasks[0]?.state).toBe("starting");
+    expect(store.get().tasks[0]?.title).toBe("Weekly report");
   });
 
-  it("reports a cap refusal on Start", async () => {
+  it("deletes a chat and returns the refusal's message", async () => {
     const store = createTasksStore(
       fakeApi({
-        listTasks: async () => ({ tasks: [task({ state: "paused", connected: false })] }),
-        resumeTask: async () => {
-          throw new Jarvis3Error(
-            "Your machine hours for this month are used up.",
-            429,
-            "machine_hours_cap",
-          );
+        listTasks: async () => ({ tasks: [task()] }),
+        deleteTask: async () => {
+          throw new Jarvis3Error("Task is pausing — try again", 409, "busy");
         },
       }),
       fakeTimers().timers,
     );
     await store.refresh();
-    await store.resume("t1");
-    expect(store.get().error).toMatch(/machine hours/);
+    expect(await store.remove("t1")).toMatch(/try again/);
+    expect(store.get().error).toMatch(/try again/);
   });
 
   it("puts a created task at the top", async () => {

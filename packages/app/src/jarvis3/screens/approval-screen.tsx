@@ -125,7 +125,7 @@ function About({ approval }: { approval: ApprovalView }) {
   const router = useRouter();
   const taskId = approval.taskId;
   const openTask = useCallback(() => {
-    if (taskId) router.push(`/tasks/${encodeURIComponent(taskId)}` as Href);
+    if (taskId) router.push(`/chats/${encodeURIComponent(taskId)}` as Href);
   }, [router, taskId]);
   return (
     <SettingsSection title="Request">
@@ -134,7 +134,7 @@ function About({ approval }: { approval: ApprovalView }) {
         {taskId ? (
           <SettingsRow label="Task" hint={approval.taskTitle ?? taskId}>
             <Button variant="ghost" size="sm" onPress={openTask} testID="jarvis3-approval-task">
-              Open task
+              Open chat
             </Button>
           </SettingsRow>
         ) : null}
@@ -157,7 +157,7 @@ function decisionText(approval: ApprovalView): string {
   return `${decisionVerb(approval)} by ${who}${how}, ${formatWhen(decision.at)}`;
 }
 
-const SCOPE_TEXT = { task: "This task only", role: "Everyone with the same role" } as const;
+const SCOPE_TEXT = { task: "This chat only", role: "Everyone with the same role" } as const;
 
 function Outcome({ approval }: { approval: ApprovalView }) {
   const decision = approval.decision;

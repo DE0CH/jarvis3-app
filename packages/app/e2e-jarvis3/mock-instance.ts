@@ -25,6 +25,7 @@ import type {
   ApiError,
   ApprovalView,
   ChannelPostView,
+  CreateProjectRequest,
   CreateTaskRequest,
   DecideRequest,
   ErrorCode,
@@ -38,6 +39,8 @@ import type {
   PersonalLayerVersionView,
   PersonalLayerView,
   PersonalNote,
+  ProjectRepoInput,
+  ProjectView,
   ResetResult,
   ScheduleDetail,
   SetLimitsRequest,
@@ -45,6 +48,7 @@ import type {
   SuggestRequest,
   TaskView,
   ToolsAdminView,
+  UpdateProjectRequest,
   UserDetail,
   UserStatus,
   WakeupView,
@@ -72,11 +76,30 @@ interface StoredLayer {
   versions: { view: PersonalLayerVersionView; layer: LayerContent }[];
 }
 
+/** A task as a spec seeds it; the chat fields default (lastActivityAt = createdAt, no Projects). */
+export type MockTaskInput = Omit<TaskView, "lastActivityAt" | "projects"> &
+  Partial<Pick<TaskView, "lastActivityAt" | "projects">>;
+
+/** A Project as the mock stores it: secret values are kept here only and never sent back. */
+export interface MockProject {
+  id: string;
+  name: string;
+  description: string;
+  ownerId: string | null;
+  roles: string[];
+  repos: ProjectView["repos"];
+  secrets: Record<string, { value: string; updatedAt: string }>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MockInstanceOptions {
   distDir: string | null;
   port?: number;
   users?: MockUser[];
-  tasks?: TaskView[];
+  tasks?: MockTaskInput[];
+  /** Projects to start with. */
+  projects?: MockProject[];
   /** taskId -> the daemon its proxy reaches. */
   daemons?: Record<string, MockDaemonTarget>;
   /** A created or resumed task becomes running after this long (ms). */
@@ -136,6 +159,9 @@ export interface MockInstance {
     files: Map<string, Map<string, StoredFile>>;
     /** Every POST /api/tasks body, in order. */
     createRequests: CreateTaskRequest[];
+    /** Every POST /api/tasks/:id/messages, in order. */
+    messages: { taskId: string; text: string; requestId: string | null }[];
+    projects: MockProject[];
     /** Download links handed out (GET /api/users/:id/files/<path>?link=1), in order. */
     fileLinks: { path: string; url: string }[];
   } & ReturnType<typeof createMockPush>["state"];
@@ -212,7 +238,14 @@ function setOverride(previous: number | null, next: number | null | undefined): 
 export async function startMockInstance(options: MockInstanceOptions): Promise<MockInstance> {
   const users = options.users ?? DEFAULT_USERS;
   const appScheme = options.appScheme ?? "jarvis3";
-  const tasks: TaskView[] = (options.tasks ?? []).map((task) => Object.assign({}, task));
+  const tasks: TaskView[] = (options.tasks ?? []).map((task) =>
+    Object.assign(
+      { lastActivityAt: task.lastActivityAt ?? task.createdAt, projects: task.projects ?? [] },
+      task,
+    ),
+  );
+  const projects: MockProject[] = (options.projects ?? []).map((p) => structuredClone(p));
+  const messages: { taskId: string; text: string; requestId: string | null }[] = [];
   const daemons: Record<string, MockDaemonTarget> = { ...options.daemons };
   const layers = new Map<string, StoredLayer>();
   const limits = new Map<
@@ -238,6 +271,7 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       files: true,
       search: true,
       push: { apns: true, webPush: true },
+      projects: true,
       ...(options.tools ? { tools: { search: true, fetch: true, proxy: true } } : {}),
     },
     unreadPosts: scheduled.unreadPosts(user.id),
@@ -495,9 +529,14 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       pausedReason: null,
       createdAt: now(),
       updatedAt: now(),
+      lastActivityAt: now(),
       connected: false,
       agentId: null,
       attachments,
+      projects: (request.projects ?? []).map((id) => {
+        const project = projects.find((p) => p.id === id);
+        return { id, name: project?.name ?? id };
+      }),
     };
     tasks.unshift(task);
     if (options.newTaskDaemon) daemons[task.id] = options.newTaskDaemon;
@@ -515,6 +554,21 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     for (const attached of attachments) {
       if (!filesOf(user.id).has(attached)) {
         throw new HttpError(400, "bad_request", `attachment ${attached} is not in your files`);
+      }
+    }
+    const picked = (request.projects ?? []).map((id) => usableProject(user, id));
+    const seen = new Map<string, { value: string; project: string }>();
+    for (const project of picked) {
+      for (const [k, secret] of Object.entries(project.secrets)) {
+        const before = seen.get(k);
+        if (before && before.value !== secret.value) {
+          throw new HttpError(
+            400,
+            "bad_request",
+            `secret ${k} has different values in Projects "${before.project}" and "${project.name}"`,
+          );
+        }
+        seen.set(k, { value: secret.value, project: project.name });
       }
     }
     const key = `${user.id}:${request.requestId ?? ""}`;
@@ -541,6 +595,129 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
     });
     startLater(task);
     return [202, task];
+  };
+
+  const sentIds = new Map<string, string>();
+  const renameTask: Handler = async ({ user, params, body }) => {
+    const task = tasks.find((t) => t.id === params[0] && t.userId === user.id);
+    if (!task) throw new HttpError(404, "not_found", "no such task");
+    const { title } = (await body()) as { title?: string };
+    const trimmed = (title ?? "").trim();
+    if (!trimmed || trimmed.length > 120) {
+      throw new HttpError(400, "bad_request", "title must be 1..120 characters");
+    }
+    return [200, touch(task, { title: trimmed, titleSetByUser: true })];
+  };
+  const sendMessage: Handler = async ({ user, params, body }) => {
+    const task = tasks.find((t) => t.id === params[0] && t.userId === user.id);
+    if (!task) throw new HttpError(404, "not_found", "no such task");
+    const { text, requestId } = (await body()) as { text?: string; requestId?: string };
+    if (!text || text.length > 16000) throw new HttpError(400, "bad_request", "text is 1..16000");
+    const key = `${task.id}:${requestId ?? ""}`;
+    if (requestId && sentIds.has(key)) return [202, { task, messageId: sentIds.get(key) }];
+    if (["failed", "destroying", "archived"].includes(task.state)) {
+      throw new HttpError(409, "conflict", `a ${task.state} task can't take messages`);
+    }
+    if (task.state === "paused") {
+      if (options.capReached?.includes(user.id)) {
+        throw new HttpError(429, "machine_hours_cap", "your machine hours are used up");
+      }
+      touch(task, {
+        state: "starting",
+        busy: { kind: "resuming", since: now() },
+        pausedReason: null,
+      });
+      startLater(task);
+    }
+    counter += 1;
+    const messageId = `m${counter}`;
+    if (requestId) sentIds.set(key, messageId);
+    messages.push({ taskId: task.id, text, requestId: requestId ?? null });
+    touch(task, { lastActivityAt: now() });
+    return [202, { task, messageId }];
+  };
+
+  // ---- Projects ----
+
+  const visibleProject = (user: MockUser, p: MockProject) =>
+    p.ownerId === user.id || (p.ownerId === null && (user.isAdmin || p.roles.includes(user.role)));
+  const canEditProject = (user: MockUser, p: MockProject) =>
+    p.ownerId === user.id || (p.ownerId === null && user.isAdmin);
+  const projectView = (user: MockUser, p: MockProject): ProjectView => ({
+    id: p.id,
+    name: p.name,
+    description: p.description,
+    shared: p.ownerId === null,
+    roles: [...p.roles],
+    ownerId: p.ownerId,
+    repos: p.repos.map((r) => ({ ...r })),
+    secrets: Object.entries(p.secrets)
+      .map(([key, s]) => ({ key, updatedAt: s.updatedAt }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
+    canEdit: canEditProject(user, p),
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+  });
+  const usableProject = (user: MockUser, id: string): MockProject => {
+    const p = projects.find((x) => x.id === id);
+    if (!p || !visibleProject(user, p)) throw new HttpError(400, "bad_request", `no Project ${id}`);
+    return p;
+  };
+  const findProject = (user: MockUser, id: string): MockProject => {
+    const p = projects.find((x) => x.id === id);
+    if (!p || !visibleProject(user, p)) throw new HttpError(404, "not_found", "no such project");
+    return p;
+  };
+  const repoOf = (r: ProjectRepoInput) => ({
+    url: r.url,
+    ref: r.ref ?? null,
+    tokenSecret: r.tokenSecret ?? null,
+  });
+  const createProject: Handler = async ({ user, body }) => {
+    const request = (await body()) as CreateProjectRequest;
+    if (!request.name?.trim()) throw new HttpError(400, "bad_request", "name is required");
+    if (request.shared && !user.isAdmin) {
+      throw new HttpError(403, "forbidden", "only admins share Projects");
+    }
+    counter += 1;
+    const t = now();
+    const p: MockProject = {
+      id: `p${counter.toString(16).padStart(15, "0")}`,
+      name: request.name.trim(),
+      description: request.description ?? "",
+      ownerId: request.shared ? null : user.id,
+      roles: request.shared ? (request.roles ?? []) : [],
+      repos: (request.repos ?? []).map(repoOf),
+      secrets: Object.fromEntries(
+        Object.entries(request.secrets ?? {}).map(([k, v]) => [k, { value: v, updatedAt: t }]),
+      ),
+      createdAt: t,
+      updatedAt: t,
+    };
+    projects.push(p);
+    return [201, projectView(user, p)];
+  };
+  const updateProject: Handler = async ({ user, params, body }) => {
+    const p = findProject(user, params[0] ?? "");
+    if (!canEditProject(user, p)) throw new HttpError(403, "forbidden", "you can't edit this");
+    const request = (await body()) as UpdateProjectRequest;
+    const t = now();
+    if (request.name !== undefined) p.name = request.name.trim();
+    if (request.description !== undefined) p.description = request.description;
+    if (request.repos) p.repos = request.repos.map(repoOf);
+    if (request.roles && p.ownerId === null) p.roles = request.roles;
+    for (const [k, v] of Object.entries(request.secrets ?? {})) {
+      if (v === null) delete p.secrets[k];
+      else p.secrets[k] = { value: v, updatedAt: t };
+    }
+    p.updatedAt = t;
+    return [200, projectView(user, p)];
+  };
+  const deleteProject: Handler = ({ user, params }) => {
+    const p = findProject(user, params[0] ?? "");
+    if (!canEditProject(user, p)) throw new HttpError(403, "forbidden", "you can't delete this");
+    projects.splice(projects.indexOf(p), 1);
+    return [200, { ok: true }];
   };
 
   // ---- personal layer handlers ----
@@ -927,6 +1104,29 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
         touch(ownTask(user, params[0] ?? ""), { state: "archived", busy: null, connected: false }),
       ],
     ],
+    ["PATCH", new RegExp(`^/api/tasks/${ID}$`), renameTask],
+    ["POST", new RegExp(`^/api/tasks/${ID}/messages$`), sendMessage],
+    [
+      "GET",
+      /^\/api\/projects$/,
+      ({ user }) => [
+        200,
+        {
+          projects: projects
+            .filter((p) => visibleProject(user, p))
+            .map((p) => projectView(user, p)),
+          ...(user.isAdmin ? { roles: ["admin", "staff"] } : {}),
+        },
+      ],
+    ],
+    ["POST", /^\/api\/projects$/, createProject],
+    [
+      "GET",
+      new RegExp(`^/api/projects/${ID}$`),
+      ({ user, params }) => [200, projectView(user, findProject(user, params[0] ?? ""))],
+    ],
+    ["PATCH", new RegExp(`^/api/projects/${ID}$`), updateProject],
+    ["DELETE", new RegExp(`^/api/projects/${ID}$`), deleteProject],
     ["POST", new RegExp(`^/api/tasks/${ID}/pause$`), pauseTask],
     ["POST", new RegExp(`^/api/tasks/${ID}/resume$`), resumeTask],
     [
@@ -1283,6 +1483,8 @@ export async function startMockInstance(options: MockInstanceOptions): Promise<M
       ...push.state,
       files: fileStore,
       createRequests,
+      messages,
+      projects,
       fileLinks,
     },
     addPost: scheduled.addPost,

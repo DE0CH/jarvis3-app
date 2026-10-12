@@ -208,7 +208,7 @@ export function planMove(
 }
 
 export function fileSourceLabel(file: Pick<FileView, "source" | "taskId">): string | null {
-  return file.source === "session" ? "Saved by a task" : null;
+  return file.source === "session" ? "Saved by a chat" : null;
 }
 
 /**

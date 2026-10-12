@@ -35,6 +35,9 @@ import { ChangelogHost } from "@/changelog";
 import { AppDiagnosticHost } from "@/components/app-diagnostic-host";
 import { AppearanceStyleBoundary } from "@/components/appearance-style-boundary";
 import { LeftSidebar } from "@/components/left-sidebar";
+import { isJarvis3 } from "@/jarvis3/config";
+import { PUSHED_ROUTE_NAMES } from "@/jarvis3/nav";
+import { Jarvis3Sidebar, useJarvis3Chrome } from "@/jarvis3/sidebar";
 import { WindowSidebarMenuToggle } from "@/components/headers/menu-header";
 import { DesktopWindowControls } from "@/components/desktop/window-controls";
 import { SidebarModelProvider } from "@/components/sidebar/sidebar-model";
@@ -478,7 +481,8 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
   const explorerSidebarPresentation = resolveExplorerSidebarPresentation({
     isCompact: isCompactLayout,
   });
-  const usesCompactExplorerHost = explorerSidebarPresentation !== "pane";
+  // jarvis3: a chat has no file explorer
+  const usesCompactExplorerHost = explorerSidebarPresentation !== "pane" && !isJarvis3;
   useCompactWebViewportZoomLock(isCompactLayout);
   const pathname = usePathname();
   const isWorkspaceRoute = parseHostWorkspaceRouteFromPathname(pathname) !== null;
@@ -501,7 +505,9 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
   // conflate workspace/project-specific chrome (sidebar, mobile gesture) with
   // global concerns like keyboard shortcuts. Split those out so settings (and
   // other non-workspace routes) don't need a special-case to keep shortcuts alive.
-  const keyboardShortcutsEnabled = chromeEnabled || pathname.startsWith("/settings");
+  // jarvis3: Paseo's host/workspace shortcuts don't apply to its screens
+  const keyboardShortcutsEnabled =
+    !isJarvis3 && (chromeEnabled || pathname.startsWith("/settings"));
 
   useKeyboardShortcuts({
     enabled: keyboardShortcutsEnabled,
@@ -643,7 +649,8 @@ function SidebarChrome({
   const active = visible && (isCompactLayout ? isMobileActive : isDesktopOpen);
   return (
     <SidebarModelProvider active={active}>
-      {mounted ? <LeftSidebar active={active} /> : null}
+      {mounted && isJarvis3 ? <Jarvis3Sidebar active={active} /> : null}
+      {mounted && !isJarvis3 ? <LeftSidebar active={active} /> : null}
       <WorkspaceShortcutTargetsSubscriber enabled={keyboardShortcutsEnabled} />
     </SidebarModelProvider>
   );
@@ -857,13 +864,16 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
   const routeServerId = useMemo(() => parseServerIdFromPathname(pathname), [pathname]);
   const routeHasKnownHost =
     routeServerId !== null && hosts.some((host) => host.serverId === routeServerId);
-  const shouldShowAppChrome =
-    storeReady &&
-    (pathname === "/open-project" ||
-      pathname === "/new" ||
-      pathname === "/sessions" ||
-      pathname === "/schedules" ||
-      routeHasKnownHost);
+  // jarvis3: its own sidebar (chats), on its screens once signed in
+  const jarvis3Chrome = useJarvis3Chrome(pathname);
+  const shouldShowAppChrome = isJarvis3
+    ? jarvis3Chrome
+    : storeReady &&
+      (pathname === "/open-project" ||
+        pathname === "/new" ||
+        pathname === "/sessions" ||
+        pathname === "/schedules" ||
+        routeHasKnownHost);
 
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
 }
@@ -877,6 +887,9 @@ const ROOT_STACK_SCREEN_OPTIONS = {
   headerShown: false,
   animation: "none" as const,
 };
+// jarvis3: its detail screens are pushed (native push and swipe-back)
+const JARVIS3_PUSHED_SCREEN_OPTIONS = { animation: "default" as const, gestureEnabled: true };
+const JARVIS3_PUSHED_SCREENS = isJarvis3 ? [...PUSHED_ROUTE_NAMES] : [];
 const ROOT_STACK_NESTED_NAVIGATOR_SCREENS = ["h/[serverId]"] as const;
 
 function RootStack() {
@@ -903,6 +916,9 @@ function RootStack() {
       <Stack.Screen name="settings/hosts/[serverId]/plugins/[pluginId]/[screenId]" />
       <Stack.Screen name="settings/hosts/[serverId]/projects/index" />
       <Stack.Screen name="settings/hosts/[serverId]/projects/[projectId]" />
+      {JARVIS3_PUSHED_SCREENS.map((name) => (
+        <Stack.Screen key={name} name={name} options={JARVIS3_PUSHED_SCREEN_OPTIONS} />
+      ))}
     </ThemedStack>
   );
 }

@@ -47,7 +47,7 @@ function NoticesBody({ loaded, notices }: { loaded: boolean; notices: NoticeView
     return (
       <EmptyState
         title="No notices"
-        hint="The instance tells you here when a limit pauses a task or a task can't start."
+        hint="Jarvis tells you here when a limit stops a chat or a chat can't start."
       />
     );
   }

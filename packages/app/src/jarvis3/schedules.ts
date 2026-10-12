@@ -478,7 +478,7 @@ export function noticeTarget(
   if (!notice.taskId) return null;
   const id = encodeURIComponent(notice.taskId);
   if (notice.kind === "channel_post") return { href: `/channels/${id}`, label: "Read" };
-  return { href: `/tasks/${id}`, label: "Open task" };
+  return { href: `/chats/${id}`, label: "Open chat" };
 }
 
 /** "Schedules" in the navigation. */
