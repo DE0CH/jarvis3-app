@@ -22,14 +22,15 @@ function sources(dir: string): string[] {
   });
 }
 
+function offenders(file: string): string[] {
+  const text = readFileSync(file, "utf8");
+  return MISSING_ON_HERMES.filter((m) => text.includes(m)).map(
+    (m) => `${path.basename(file)}: ${m}`,
+  );
+}
+
 describe("jarvis3 code runs on Hermes", () => {
   it("uses none of the Array methods Hermes lacks", () => {
-    const found = sources(__dirname).flatMap((file) => {
-      const text = readFileSync(file, "utf8");
-      return MISSING_ON_HERMES.filter((m) => text.includes(m)).map(
-        (m) => `${path.basename(file)}: ${m}`,
-      );
-    });
-    expect(found).toEqual([]);
+    expect(sources(__dirname).flatMap(offenders)).toEqual([]);
   });
 });
