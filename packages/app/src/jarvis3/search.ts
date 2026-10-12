@@ -28,7 +28,7 @@ export function highlightSegments(
   const ranges = matches
     .map(([start, end]) => [Math.max(0, start), Math.min(snippet.length, end)] as const)
     .filter(([start, end]) => end > start)
-    .toSorted((a, b) => a[0] - b[0]);
+    .slice().sort((a, b) => a[0] - b[0]);
   const segments: Segment[] = [];
   let at = 0;
   for (const [start, end] of ranges) {

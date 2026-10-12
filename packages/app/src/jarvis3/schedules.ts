@@ -287,7 +287,7 @@ export function scheduleStatus(
 
 export function schedulesOrdered(schedules: readonly ScheduleView[]): ScheduleView[] {
   // on first, soonest first; then off ones by title
-  return schedules.toSorted((a, b) => {
+  return schedules.slice().sort((a, b) => {
     if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
     if (a.nextRunAt && b.nextRunAt && a.nextRunAt !== b.nextRunAt) {
       return a.nextRunAt.localeCompare(b.nextRunAt);
@@ -359,7 +359,7 @@ export function describeWakeupWhen(
 
 /** Armed first (soonest first), then the rest newest first: the server's order, kept stable. */
 export function wakeupsOrdered(wakeups: readonly WakeupView[]): WakeupView[] {
-  return wakeups.toSorted((a, b) => {
+  return wakeups.slice().sort((a, b) => {
     const aArmed = a.state === "armed";
     const bArmed = b.state === "armed";
     if (aArmed !== bArmed) return aArmed ? -1 : 1;

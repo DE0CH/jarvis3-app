@@ -98,7 +98,7 @@ export function TranscriptScreen({
   const more = useCallback(
     (direction: "older" | "newer") => {
       if (!page) return;
-      const edge = direction === "older" ? page.entries[0] : page.entries.at(-1);
+      const edge = direction === "older" ? page.entries[0] : page.entries[page.entries.length - 1];
       if (!edge) return;
       const run = async () => {
         setLoading(direction);
